@@ -9,10 +9,11 @@ https://github.com/user-attachments/assets/1a0cacaa-b300-4d0f-9878-ee97e093ca0a
 ## Features
 
 ### Romaji Captions
-- Adds "Romaji (auto)" option to YouTube's caption menu for videos with Japanese subtitles
-- Converts Japanese text (kanji, hiragana, katakana) to romaji using Hepburn romanization
+- Adds "Romaji" option to YouTube's caption menu for videos with Japanese manual subtitles
+- Converts Japanese text (kanji, hiragana, katakana) to romaji using Hepburn romanization via OpenAI GPT-5
+- Proactive background romanization starts automatically when Japanese subtitles are detected
 - Displays romanized captions as an overlay synced with video playback
-- Caches converted captions for faster loading on repeat views
+- Shared database caching for instant loading across all users (first user romanizes, everyone benefits)
 
 ### Custom Subtitles
 - Upload your own subtitle files (.srt, .vtt, .ass, .ssa) for any YouTube video
@@ -22,12 +23,13 @@ https://github.com/user-attachments/assets/1a0cacaa-b300-4d0f-9878-ee97e093ca0a
 ## How It Works
 
 ### Architecture
-The extension uses a multi-component architecture to handle Japanese text processing:
+The extension uses a server-side API architecture for high-quality romanization:
 
 1. **Content Script** (`content.js`)
    - Runs on YouTube pages
-   - Injects "Romaji (auto)" menu item into caption settings
+   - Injects "Romaji" menu item into caption settings
    - Fetches caption data from YouTube's TimedText API
+   - Sends full caption text to API for romanization
    - Manages caption overlay rendering and synchronization
 
 2. **Page Bridge** (`page-bridge.js`)
@@ -36,38 +38,36 @@ The extension uses a multi-component architecture to handle Japanese text proces
    - Sniffs TimedText API URLs to capture signed request parameters
 
 3. **Background Service Worker** (`background.js`)
-   - Routes messages between content script and offscreen document
    - Fetches caption data with proper credentials to avoid CORS issues
-   - Manages cache pruning and storage
+   - Handles cross-origin requests for YouTube APIs
 
-4. **Offscreen Document** (`offscreen.js`)
-   - Loads and initializes Kuroshiro romanization library
-   - Performs batch text conversion using Kuromoji morphological analyzer
-   - Required because service workers cannot load DOM-dependent libraries
+4. **Romanization API** (deployed on Fly.io)
+   - Express.js server with OpenAI integration
+   - Uses GPT-5 with high reasoning for accurate romanization
+   - Supabase database caching (shared across all users)
+   - Deployed at: https://youtube-romaji-api.fly.dev/
 
 ### Romanization Process
 
-1. User selects "Romaji (auto)" from caption menu
-2. Content script fetches Japanese captions from YouTube's TimedText API
-3. Caption text sent to offscreen document in batches
-4. Kuromoji analyzer tokenizes Japanese text into morphemes
-5. Kuroshiro converts tokens to romaji using Hepburn system with spacing
-6. Converted captions cached in browser storage
+1. User opens a YouTube video with Japanese manual subtitles
+2. Extension detects Japanese track and proactively fetches captions
+3. Full caption text sent to API with video ID
+4. API checks Supabase database for cached romanization
+5. If cache miss: GPT-5 romanizes text using Hepburn rules
+6. Result stored in database and returned to extension
 7. Content script renders romaji text synchronized with video playback
+8. User can click "Romaji" anytime - if ready, shows immediately; if pending, auto-shows when complete
 
 ### Technical Details
 
 **Japanese Text Processing:**
-- Library: Kuroshiro v1.3.2 with KuromojiAnalyzer
-- Romanization: Hepburn system (most common for English speakers)
-- Mode: Spaced (adds spaces between morphemes for readability)
-- Dictionary: Kuromoji 0.1.2 (11 dictionary files, ~15.7 MB total)
-
-**Dictionary Loading:**
-- Dictionaries bundled with extension and served locally
-- Fetch interception wrapper serves files from memory cache
-- Pre-loads all dictionary files on offscreen document initialization
-- Uses CDN path with local fallback to avoid chrome-extension:// URL issues
+- Model: OpenAI GPT-5 with reasoning_effort: 'high'
+- Romanization: Hepburn system with specific rules:
+  - Particles: は→wa, へ→e, を→o
+  - Small tsu (っ): Gemination (doubles next consonant)
+  - N (ん): Context-aware (m before b/m/p, n otherwise)
+  - Long vowels: ou→ō, uu→ū, aa→ā
+- Prompt managed via OpenAI Prompt API for easy updates
 
 **Caption Fetching:**
 - Monitors YouTube's network requests to capture TimedText URLs
@@ -76,25 +76,19 @@ The extension uses a multi-component architecture to handle Japanese text proces
 - Background worker fetches with credentials to bypass CORS restrictions
 
 **Performance:**
-- First load: ~500ms for dictionary initialization + conversion time
-- Cached: Instant playback using stored conversions
-- Storage: Indexed by video ID + caption track version
-- Cache TTL: 30 days with automatic pruning
+- First request (cache miss): ~2-4 seconds (API call + GPT-5 reasoning)
+- Cached requests: ~200-500ms (database lookup)
+- Proactive romanization: Starts automatically when Japanese subs detected
+
+**Manual Subtitles Only:**
+- Auto-generated subtitles are NOT supported
+- Extension only romanizes manual Japanese subtitle tracks
+- This ensures high-quality source text for accurate romanization
 
 ## Known Limitations
 
-### Kanji Reading Ambiguity
-The morphological analyzer sometimes selects incorrect readings for kanji with multiple pronunciations. Example:
-
-- Input: あたし側にいるわ
-- Expected: "atashi soba ni iru wa" (側 = そば, meaning "beside")
-- Output: "atashi gawa ni iru wa" (側 = がわ, meaning "side/faction")
-
-This occurs because:
-- Kuromoji uses statistical models trained on standard Japanese text
-- Song lyrics often drop particles and use non-standard phrasing
-- YouTube captions lack furigana (reading hints) for disambiguation
-- No practical client-side solution exists without manual corrections
+### Manual Subtitles Required
+Auto-generated subtitles are not supported due to lower quality and accuracy. The extension only works with manually created Japanese subtitle tracks.
 
 ## Installation
 

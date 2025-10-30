@@ -206,9 +206,6 @@ window.addEventListener('message', (e) => {
       if (d.captionTracks.length > 0 && !tracksLoggedThisNav) {
         console.log('[romaji] player data loaded, tracks:', d.captionTracks.length);
         tracksLoggedThisNav = true;
-        
-        // Start proactive romanization in background
-        startProactiveRomanization(lastVideoId, d.captionTracks);
       }
       
       if (d.captionTracks.length > 0 && !menuWired) {
@@ -223,6 +220,12 @@ window.addEventListener('message', (e) => {
     try {
       if (typeof lastTimedtextUrl === 'string' && lastTimedtextUrl.length > 0) {
         console.log('[romaji] sniffed timedtext url:', lastTimedtextUrl);
+        
+        const videoId = getCurrentVideoId();
+        const tracks = latestTracksByVideo.get(videoId);
+        if (tracks && tracks.length > 0) {
+          startProactiveRomanization(videoId, tracks);
+        }
       }
     } catch {}
   }
@@ -543,19 +546,41 @@ async function onSelectRomaji() {
       console.log('[romaji] using proactively romanized cues');
       showOverlay(cached.cues);
     } else if (cached?.status === 'pending') {
-      console.log('[romaji] romanization in progress, pausing video');
-      const video = document.querySelector('video');
-      if (video) video.pause();
-      alert('Subtitles are currently being romanized. Please wait a moment and try again.');
+      console.log('[romaji] romanization in progress, waiting for completion');
+      alert('Subtitles are currently being romanized and will be displayed once finished.');
+      
+      const checkInterval = setInterval(() => {
+        const updated = romanizationCache.get(vid);
+        if (updated?.status === 'ready') {
+          clearInterval(checkInterval);
+          console.log('[romaji] romanization complete, showing overlay');
+          showOverlay(updated.cues);
+        } else if (updated?.status === 'error') {
+          clearInterval(checkInterval);
+          console.error('[romaji] romanization failed:', updated.error);
+          alert(`Failed to romanize subtitles: ${updated.error}`);
+        }
+      }, 500);
     } else if (cached?.status === 'error') {
       console.error('[romaji] proactive romanization failed:', cached.error);
       alert(`Failed to romanize subtitles: ${cached.error}`);
     } else {
       console.log('[romaji] no proactive romanization found, starting now');
       startProactiveRomanization(vid, tracks);
-      const video = document.querySelector('video');
-      if (video) video.pause();
-      alert('Subtitles are being romanized. Please wait a moment and try again.');
+      alert('Subtitles are being romanized and will be displayed once finished.');
+      
+      const checkInterval = setInterval(() => {
+        const updated = romanizationCache.get(vid);
+        if (updated?.status === 'ready') {
+          clearInterval(checkInterval);
+          console.log('[romaji] romanization complete, showing overlay');
+          showOverlay(updated.cues);
+        } else if (updated?.status === 'error') {
+          clearInterval(checkInterval);
+          console.error('[romaji] romanization failed:', updated.error);
+          alert(`Failed to romanize subtitles: ${updated.error}`);
+        }
+      }, 500);
     }
     } catch (err) {
       console.error("[romaji] onSelectRomaji error:", err);
