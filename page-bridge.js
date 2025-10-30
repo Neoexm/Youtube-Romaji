@@ -35,10 +35,12 @@
 
   const emit = (url) => {
     try {
+      const isASR = url.includes('&kind=asr') || url.includes('&caps=asr');
       window.postMessage({ 
         source: ORIGIN_TAG, 
         type: 'TIMEDTEXT_URL', 
-        url 
+        url,
+        isASR 
       }, '*');
     } catch {}
   };

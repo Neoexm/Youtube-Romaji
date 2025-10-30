@@ -59,6 +59,7 @@ let latestYtCfg = {};
 let lastVideoId = null;
 
 let lastTimedtextUrl = null;
+let lastTimedtextUrlASR = null;
 let lastVideoIdForTimedtext = null;
 
 let menuWired = false;
@@ -174,10 +175,6 @@ async function startProactiveRomanization(videoId, tracks) {
       throw new Error(fetchResult.error);
     }
     
-    if (lastTimedtextUrl && (lastTimedtextUrl.includes('&kind=asr') || lastTimedtextUrl.includes('&caps=asr'))) {
-      throw new Error('Captured URL is for auto-generated subtitles, not manual');
-    }
-    
     const cues = parseTimedTextAuto(fetchResult.tag, fetchResult.body);
     if (cues.length === 0) {
       throw new Error('No cues parsed');
@@ -219,12 +216,18 @@ window.addEventListener('message', (e) => {
   }
   
   if (d.type === 'TIMEDTEXT_URL') {
-    lastTimedtextUrl = d.url;
     lastVideoIdForTimedtext = getCurrentVideoId();
+    
+    if (d.isASR) {
+      lastTimedtextUrlASR = d.url;
+      console.log('[romaji] sniffed ASR timedtext url (will use as fallback)');
+    } else {
+      lastTimedtextUrl = d.url;
+      console.log('[romaji] sniffed manual timedtext url:', lastTimedtextUrl);
+    }
+    
     try {
-      if (typeof lastTimedtextUrl === 'string' && lastTimedtextUrl.length > 0) {
-        console.log('[romaji] sniffed timedtext url:', lastTimedtextUrl);
-        
+      if (lastTimedtextUrl || lastTimedtextUrlASR) {
         const videoId = getCurrentVideoId();
         const tracks = latestTracksByVideo.get(videoId);
         if (tracks && tracks.length > 0) {
@@ -338,6 +341,25 @@ function tryWireCaptionMenu() {
   console.log("[romaji] wiring caption menu observer");
   if (captionMenuObserver) captionMenuObserver.disconnect();
   
+  const settingsBtn = document.querySelector('.ytp-settings-button');
+  if (settingsBtn && !settingsBtn.hasAttribute('data-romaji-wired')) {
+    settingsBtn.setAttribute('data-romaji-wired', 'true');
+    settingsBtn.addEventListener('click', () => {
+      setTimeout(() => {
+        const tracks = getCachedTracks();
+        const hasJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || ""));
+        
+        if (hasJa) {
+          updateSubtitleCount();
+          if (isRomajiActive) {
+            updateSubtitleDisplay('Romaji');
+            startSubtitleDisplayWatcher();
+          }
+        }
+      }, 100);
+    });
+  }
+  
   captionMenuObserver = new MutationObserver(muts => {
     for (const mut of muts) {
       for (const node of mut.addedNodes) {
@@ -346,6 +368,19 @@ function tryWireCaptionMenu() {
           if (title && CAPTION_PANEL_TITLE_RE.test(title.textContent || "")) {
             console.log("[romaji] injecting caption entries");
             injectCaptionEntries($(".ytp-panel-menu", node));
+          } else if (title && title.textContent === 'Settings') {
+            setTimeout(() => {
+              const tracks = getCachedTracks();
+              const hasJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || ""));
+              
+              if (hasJa) {
+                updateSubtitleCount();
+                if (isRomajiActive) {
+                  updateSubtitleDisplay('Romaji');
+                  startSubtitleDisplayWatcher();
+                }
+              }
+            }, 50);
           }
         }
       }
@@ -354,6 +389,37 @@ function tryWireCaptionMenu() {
   
   captionMenuObserver.observe(holder, { childList: true, subtree: true });
   menuWired = true;
+}
+
+let subtitleDisplayObserver = null;
+
+function startSubtitleDisplayWatcher() {
+  if (subtitleDisplayObserver) subtitleDisplayObserver.disconnect();
+  
+  const subtitleMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(item => {
+    const label = item.querySelector('.ytp-menuitem-label');
+    return label && label.textContent.includes('Subtitles/CC');
+  });
+  
+  if (!subtitleMenuItem) return;
+  
+  const contentEl = subtitleMenuItem.querySelector('.ytp-menuitem-content');
+  if (!contentEl) return;
+  
+  subtitleDisplayObserver = new MutationObserver(() => {
+    if (isRomajiActive && contentEl.textContent !== 'Romaji') {
+      contentEl.textContent = 'Romaji';
+    }
+  });
+  
+  subtitleDisplayObserver.observe(contentEl, { childList: true, characterData: true, subtree: true });
+}
+
+function stopSubtitleDisplayWatcher() {
+  if (subtitleDisplayObserver) {
+    subtitleDisplayObserver.disconnect();
+    subtitleDisplayObserver = null;
+  }
 }
 
 async function injectCaptionEntries(menuEl) {
@@ -391,11 +457,18 @@ async function injectCaptionEntries(menuEl) {
   console.log('[romaji] injecting', frag.childNodes.length, 'items into menu');
   if (frag.childNodes.length) {
     menuEl.appendChild(frag);
+    setTimeout(() => updateSubtitleCount(), 50);
   } else {
     console.warn('[romaji] no items to inject');
   }
   
-  menuEl.querySelectorAll('.ytp-menuitem').forEach(item => {
+  updateMenuCheckmarks();
+  
+  if (isRomajiActive) {
+    setTimeout(() => updateSubtitleDisplay('Romaji'), 0);
+  }
+  
+  menuEl.querySelectorAll('.ytp-menuitem[role="menuitemradio"]').forEach(item => {
     if (!item.hasAttribute('data-romaji-entry')) {
       item.addEventListener('click', () => {
         if (isRomajiActive) {
@@ -405,6 +478,14 @@ async function injectCaptionEntries(menuEl) {
           ensureOverlay(false);
           setNativeCaptionsVisible(true);
           isRomajiActive = false;
+          activeRomanization = null;
+          
+          const labelEl = item.querySelector('.ytp-menuitem-label');
+          if (labelEl) {
+            item.setAttribute('aria-checked', 'true');
+            updateSubtitleDisplay(labelEl.textContent.trim());
+          }
+          
           updateMenuCheckmarks();
         }
       });
@@ -431,25 +512,50 @@ function buildMenuItem(label, onClick, entryKey) {
   li.appendChild(filler);
   
   li.addEventListener("click", evt => {
-    evt.stopPropagation();
-    if (isRomajiActive && entryKey && entryKey.startsWith('romaji:')) {
-      turnOffRomaji();
-    } else {
+    if (!isRomajiActive) {
       onClick();
     }
-  }, true);
+    
+    setTimeout(() => {
+      const backBtn = document.querySelector('.ytp-panel-back-button');
+      if (backBtn) {
+        backBtn.click();
+        
+        setTimeout(() => {
+          updateSubtitleCount();
+          if (isRomajiActive) {
+            updateSubtitleDisplay('Romaji');
+            startSubtitleDisplayWatcher();
+          }
+        }, 50);
+      }
+    }, 100);
+  }, false);
   
   li.addEventListener("keydown", evt => {
     if (evt.key === "Enter" || evt.key === " " || evt.key === "Spacebar" || evt.key === "Space") {
       evt.preventDefault();
-      evt.stopPropagation();
-      if (isRomajiActive && entryKey && entryKey.startsWith('romaji:')) {
-        turnOffRomaji();
-      } else {
+      
+      if (!isRomajiActive) {
         onClick();
       }
+      
+      setTimeout(() => {
+        const backBtn = document.querySelector('.ytp-panel-back-button');
+        if (backBtn) {
+          backBtn.click();
+          
+          setTimeout(() => {
+            updateSubtitleCount();
+            if (isRomajiActive) {
+              updateSubtitleDisplay('Romaji');
+              startSubtitleDisplayWatcher();
+            }
+          }, 50);
+        }
+      }, 100);
     }
-  }, true);
+  }, false);
   
   if (entryKey) li.dataset.romajiEntry = entryKey;
   return li;
@@ -463,8 +569,14 @@ function buildMenuItem(label, onClick, entryKey) {
 async function ensureSniffedTimedtextUrl() {
   const currentVid = getCurrentVideoId();
   
-  // If we already have a URL for this video, we're good
+  // Prefer manual URL, fallback to ASR if manual not available
   if (lastTimedtextUrl && lastVideoIdForTimedtext === currentVid) {
+    return true;
+  }
+  
+  if (lastTimedtextUrlASR && lastVideoIdForTimedtext === currentVid) {
+    console.log('[romaji] using ASR URL as fallback (no manual URL captured)');
+    lastTimedtextUrl = lastTimedtextUrlASR;
     return true;
   }
   
@@ -503,8 +615,8 @@ function turnOffRomaji() {
   ensureOverlay(false);
   setNativeCaptionsVisible(true);
   isRomajiActive = false;
+  stopSubtitleDisplayWatcher();
   updateMenuCheckmarks();
-  closeSettingsMenu();
 }
 
 async function onSelectRomaji() {
@@ -517,8 +629,10 @@ async function onSelectRomaji() {
     ensureOverlay(false);
     setNativeCaptionsVisible(true);
     isRomajiActive = false;
+    activeRomanization = null;
+    stopSubtitleDisplayWatcher();
     updateMenuCheckmarks();
-    closeSettingsMenu();
+    updateCaptionButton();
     return;
   }
   
@@ -936,7 +1050,8 @@ function showOverlay(cues) {
   setNativeCaptionsVisible(false);
   isRomajiActive = true;
   updateMenuCheckmarks();
-  closeSettingsMenu();
+  updateCaptionButton();
+  startSubtitleDisplayWatcher();
 }
 
 function setNativeCaptionsVisible(visible) {
@@ -959,16 +1074,91 @@ function setNativeCaptionsVisible(visible) {
 }
 
 function updateMenuCheckmarks() {
-  const menuItems = document.querySelectorAll('[data-romaji-entry]');
-  menuItems.forEach(item => {
-    item.setAttribute('aria-checked', isRomajiActive ? 'true' : 'false');
+  const romajiItem = document.querySelector('[data-romaji-entry="romaji:auto"]');
+  if (!romajiItem) return;
+  
+  romajiItem.setAttribute('aria-checked', isRomajiActive ? 'true' : 'false');
+  
+  if (isRomajiActive) {
+    document.body.classList.add('romaji-active');
+    
+    const nativeItems = document.querySelectorAll('.ytp-menuitem[role="menuitemradio"]:not([data-romaji-entry])');
+    nativeItems.forEach(item => {
+      item.setAttribute('aria-checked', 'false');
+    });
+    
+    updateSubtitleDisplay('Romaji');
+  } else {
+    document.body.classList.remove('romaji-active');
+  }
+}
+
+function updateSubtitleDisplay(text) {
+  const subtitleMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(item => {
+    const label = item.querySelector('.ytp-menuitem-label');
+    return label && label.textContent.includes('Subtitles/CC');
   });
+  
+  if (subtitleMenuItem) {
+    const contentEl = subtitleMenuItem.querySelector('.ytp-menuitem-content');
+    if (contentEl) {
+      contentEl.textContent = text;
+    }
+  }
+}
+
+function updateSubtitleCount() {
+  const subtitleMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(item => {
+    const label = item.querySelector('.ytp-menuitem-label');
+    return label && label.textContent.includes('Subtitles/CC');
+  });
+  
+  if (subtitleMenuItem) {
+    const countEl = subtitleMenuItem.querySelector('.ytp-menuitem-label-count');
+    if (countEl) {
+      const tracks = getCachedTracks();
+      const hasJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || ""));
+      const match = countEl.textContent.match(/\d+/);
+      
+      if (match && hasJa) {
+        const currentCount = parseInt(match[0]);
+        const originalCount = countEl.getAttribute('data-original-count');
+        
+        if (!originalCount) {
+          countEl.setAttribute('data-original-count', currentCount);
+          countEl.textContent = ` (${currentCount + 1})`;
+        } else {
+          const baseCount = parseInt(originalCount);
+          countEl.textContent = ` (${baseCount + 1})`;
+        }
+      }
+    }
+  }
+}
+
+function updateCaptionButton() {
+  setTimeout(() => {
+    const captionDisplay = document.querySelector('.ytp-subtitles-button .ytp-subtitles-button-text');
+    if (captionDisplay && isRomajiActive) {
+      captionDisplay.textContent = 'Romaji';
+    }
+  }, 100);
 }
 
 function closeSettingsMenu() {
   const settingsBtn = document.querySelector('.ytp-settings-button');
   if (settingsBtn) {
     settingsBtn.click();
+  }
+}
+
+function backToSettingsPanel() {
+  const backBtn = document.querySelector('.ytp-panel-back-button');
+  if (backBtn) {
+    console.log('[romaji] clicking back button to return to settings');
+    backBtn.click();
+  } else {
+    console.warn('[romaji] back button not found, menu may have closed');
   }
 }
 

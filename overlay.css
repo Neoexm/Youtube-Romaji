@@ -30,3 +30,7 @@
   opacity: 0.9;
 }
 
+/* Hide native caption checkmarks when Romaji is active - only in caption panel */
+body.romaji-active .ytp-panel-menu .ytp-menuitem[role="menuitemradio"]:not([data-romaji-entry]) .ytp-menuitem-toggle-checkbox {
+  display: none !important;
+}
