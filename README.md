@@ -4,9 +4,7 @@ A Chrome extension that adds romanized Japanese captions to YouTube videos and s
 
 ## Demo
 
-https://github.com/user-attachments/assets/2025-10-30-demo.mp4
-
-<video src="https://cdn.discordapp.com/attachments/1366267247408058400/1433290267988852848/2025-10-30_02-58-20.mp4?ex=69042715&is=6902d595&hm=6e01c9a5dc33fc66094451e93396e371d74b20ab74f5e241b581497ed20a805d&" controls width="100%"></video>
+https://github.com/user-attachments/assets/1a0cacaa-b300-4d0f-9878-ee97e093ca0a
 
 ## Features
 
