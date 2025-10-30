@@ -1,0 +1,32 @@
+#romaji-caption-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 60px;
+  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  padding: 0 12%;
+  box-sizing: border-box;
+  pointer-events: none;
+  font-family: "YouTube Noto", "Roboto", Arial, Helvetica, sans-serif;
+  font-size: min(4.2vw, 28px);
+  line-height: 1.3;
+  text-align: center;
+  color: #fff;
+  text-shadow: 
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000,
+    2px 2px 0 #000,
+    0 0 4px rgba(0,0,0,0.8),
+    0 0 8px rgba(0,0,0,0.8);
+  z-index: 68;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.html5-video-player:not(.ytp-show-cards-title).ytp-autohide #romaji-caption-overlay {
+  opacity: 0.9;
+}
+

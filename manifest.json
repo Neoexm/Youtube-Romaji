@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Romaji + Custom Subtitles",
+  "version": "1.0.0",
+  "description": "Adds Romaji option to YouTube subtitles and supports per-video custom subtitle uploads.",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "permissions": ["storage", "offscreen", "scripting"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://youtu.be/*",
+    "https://m.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page-bridge.js",
+        "lib/kuromoji/dict/base.dat.gz",
+        "lib/kuromoji/dict/check.dat.gz",
+        "lib/kuromoji/dict/tid_map.dat.gz",
+        "lib/kuromoji/dict/tid_pos.dat.gz",
+        "lib/kuromoji/dict/tid.dat.gz",
+        "lib/kuromoji/dict/unk_char.dat.gz",
+        "lib/kuromoji/dict/unk_compat.dat.gz",
+        "lib/kuromoji/dict/unk_invoke.dat.gz",
+        "lib/kuromoji/dict/unk_map.dat.gz",
+        "lib/kuromoji/dict/unk_pos.dat.gz",
+        "lib/kuromoji/dict/unk.dat.gz",
+        "lib/kuromoji.min.js",
+        "lib/kuroshiro.min.js",
+        "lib/kuroshiro-analyzer.min.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

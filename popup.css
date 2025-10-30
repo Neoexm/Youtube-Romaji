@@ -1,0 +1,24 @@
+body{margin:0;font:14px Inter,system-ui,Segoe UI,Arial;background:#111;color:#eee;min-width:360px}
+#app{padding:12px;display:grid;gap:10px}
+#vid{font-weight:600;color:#bbb}
+#title{font-size:13px;color:#aaa}
+#uibar{display:flex;gap:8px;align-items:center}
+.file{position:relative;display:inline-block}
+.file input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.file span{background:#222;border:1px solid #333;padding:6px 10px;border-radius:8px;cursor:pointer}
+#uibar .file input:focus-visible+span{outline:2px solid #e33;outline-offset:2px}
+#name{flex:1;background:#161616;border:1px solid #2a2a2a;color:#ddd;border-radius:8px;padding:6px 8px}
+#save{background:#e33;color:#fff;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}
+#save:disabled{opacity:.5;cursor:not-allowed}
+#status{min-height:18px;color:#9ad}
+#preview{background:#0e0e0e;border:1px solid #222;border-radius:8px;padding:8px;max-height:150px;overflow:auto}
+#list{display:grid;gap:6px}
+.item{display:flex;justify-content:space-between;align-items:center;background:#0e0e0e;border:1px solid #222;border-radius:8px;padding:8px}
+.item input{flex:1;background:transparent;border:0;color:#ddd}
+.item .btns{display:flex;gap:6px}
+.item button{background:#222;border:1px solid #333;color:#ddd;border-radius:6px;padding:4px 8px;cursor:pointer}
+.item button:hover{background:#333}
+.empty{padding:10px;border:1px dashed #333;border-radius:8px;color:#777;text-align:center;font-size:13px;background:#0b0b0b}
+input:focus-visible,#save:focus-visible,.item button:focus-visible{outline:2px solid #e33;outline-offset:2px}
+.err{color:#f66}
+.ok{color:#7fda7f}

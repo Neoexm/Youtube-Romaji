@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Romaji & Custom Subs</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <div id="vid"></div>
+    <div id="title"></div>
+    <div id="uibar">
+      <label class="file">
+        <input id="file" type="file" accept=".srt,.vtt,.ass,.ssa,.txt">
+        <span>Upload</span>
+      </label>
+      <input id="name" type="text" placeholder="Track name" aria-label="Track name">
+      <button id="save">Save</button>
+    </div>
+    <div id="status" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="preview" role="region" aria-live="polite" aria-label="Preview"></div>
+    <div id="list" role="list" aria-label="Saved custom subtitles"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
