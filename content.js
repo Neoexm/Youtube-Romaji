@@ -174,6 +174,10 @@ async function startProactiveRomanization(videoId, tracks) {
       throw new Error(fetchResult.error);
     }
     
+    if (lastTimedtextUrl && (lastTimedtextUrl.includes('&kind=asr') || lastTimedtextUrl.includes('&caps=asr'))) {
+      throw new Error('Captured URL is for auto-generated subtitles, not manual');
+    }
+    
     const cues = parseTimedTextAuto(fetchResult.tag, fetchResult.body);
     if (cues.length === 0) {
       throw new Error('No cues parsed');
@@ -295,9 +299,6 @@ async function onNavigation(event) {
   
   tracksLoggedThisNav = false;
   
-  lastTimedtextUrl = null;
-  lastVideoIdForTimedtext = null;
-  
   if (renderer) renderer.stop();
   renderer = null;
   ensureOverlay(false);
@@ -393,6 +394,22 @@ async function injectCaptionEntries(menuEl) {
   } else {
     console.warn('[romaji] no items to inject');
   }
+  
+  menuEl.querySelectorAll('.ytp-menuitem').forEach(item => {
+    if (!item.hasAttribute('data-romaji-entry')) {
+      item.addEventListener('click', () => {
+        if (isRomajiActive) {
+          console.log('[romaji] user switched to native caption, turning off romaji');
+          if (renderer) renderer.stop();
+          renderer = null;
+          ensureOverlay(false);
+          setNativeCaptionsVisible(true);
+          isRomajiActive = false;
+          updateMenuCheckmarks();
+        }
+      });
+    }
+  });
 }
 
 function buildMenuItem(label, onClick, entryKey) {
@@ -492,6 +509,18 @@ function turnOffRomaji() {
 
 async function onSelectRomaji() {
   console.log("[romaji] onSelectRomaji triggered");
+  
+  if (isRomajiActive) {
+    console.log("[romaji] toggling off romaji");
+    if (renderer) renderer.stop();
+    renderer = null;
+    ensureOverlay(false);
+    setNativeCaptionsVisible(true);
+    isRomajiActive = false;
+    updateMenuCheckmarks();
+    closeSettingsMenu();
+    return;
+  }
   
   if (activeRomanization) {
     console.log("[romaji] romanization already in progress, ignoring");
