@@ -37,31 +37,7 @@ async function bgCall(type, payload, timeoutMs = 60000) {
   });
 }
 
-async function ensureRomanizer() {
-  console.log('[romaji] self-test starting...');
-  let r = await chrome.runtime.sendMessage({ type: 'ROMAJI_INIT' })
-    .catch(e => ({ ok:false, error:String(e) }));
-  if (!r || !r.ok) throw new Error(r?.error || 'init failed');
-
-  if (r.status !== 'ready') {
-    for (let i = 0; i < 30; i++) {
-      await new Promise(res => setTimeout(res, 100));
-      r = await chrome.runtime.sendMessage({ type: 'ROMAJI_INIT' }).catch(() => null);
-      if (r && r.ok && r.status === 'ready') break;
-    }
-  }
-  if (!r || r.status !== 'ready') throw new Error('offscreen not ready');
-}
-
-(async () => {
-  try {
-    await ensureRomanizer();
-    const resp = await chrome.runtime.sendMessage({ type: 'ROMAJI_CONVERT_BATCH', items: ['知ってる', '涙', 'ゲーム'] });
-    console.log('[romaji] self-test results:', resp.out);
-  } catch (e) {
-    console.error('[romaji] self-test failed:', e);
-  }
-})();
+// Kuromoji removed - now using API for romanization
 
 function scrubCueText(t) {
   return String(t ?? '')
@@ -171,6 +147,48 @@ async function fetchRaw(url) {
 }
 
 // ============================================================================
+// PROACTIVE ROMANIZATION
+// ============================================================================
+
+const romanizationCache = new Map(); // videoId -> { status: 'pending'|'ready'|'error', cues: [...] }
+
+async function startProactiveRomanization(videoId, tracks) {
+  const japaneseTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+  
+  if (!japaneseTrack) {
+    console.log('[romaji] no manual Japanese track for proactive romanization');
+    return;
+  }
+  
+  if (romanizationCache.has(videoId)) {
+    console.log('[romaji] already romanizing or romanized:', videoId);
+    return;
+  }
+  
+  console.log('[romaji] starting proactive romanization for:', videoId);
+  romanizationCache.set(videoId, { status: 'pending', cues: null });
+  
+  try {
+    const fetchResult = await fetchCaptionsUsingSniff();
+    if (!fetchResult.ok) {
+      throw new Error(fetchResult.error);
+    }
+    
+    const cues = parseTimedTextAuto(fetchResult.tag, fetchResult.body);
+    if (cues.length === 0) {
+      throw new Error('No cues parsed');
+    }
+    
+    const romanizedCues = await romanizeCues(cues);
+    romanizationCache.set(videoId, { status: 'ready', cues: romanizedCues });
+    console.log('[romaji] proactive romanization complete:', videoId);
+  } catch (err) {
+    console.error('[romaji] proactive romanization failed:', err);
+    romanizationCache.set(videoId, { status: 'error', cues: null, error: err.message });
+  }
+}
+
+// ============================================================================
 // BRIDGE EVENT LISTENERS
 // ============================================================================
 
@@ -188,6 +206,9 @@ window.addEventListener('message', (e) => {
       if (d.captionTracks.length > 0 && !tracksLoggedThisNav) {
         console.log('[romaji] player data loaded, tracks:', d.captionTracks.length);
         tracksLoggedThisNav = true;
+        
+        // Start proactive romanization in background
+        startProactiveRomanization(lastVideoId, d.captionTracks);
       }
       
       if (d.captionTracks.length > 0 && !menuWired) {
@@ -213,18 +234,7 @@ window.addEventListener('message', (e) => {
 
 start();
 
-async function clearOldCache() {
-  console.log('[romaji] clearing old cache...');
-  const all = await chrome.storage.local.get(null);
-  const toDelete = Object.keys(all).filter(k => k.startsWith('cache:') && !k.includes(':v2:'));
-  console.log('[romaji] found', toDelete.length, 'old cache entries');
-  if (toDelete.length > 0) {
-    await chrome.storage.local.remove(toDelete);
-    console.log('[romaji] old cache cleared!');
-  }
-}
-
-window.__clearRomajiCache = clearOldCache;
+// Local cache removed - API/database handles all caching now
 
 async function start() {
   console.log("[romaji] extension starting");
@@ -363,8 +373,8 @@ async function injectCaptionEntries(menuEl) {
   console.log('[romaji] has Japanese track:', hasJa);
   
   if (hasJa) {
-    console.log('[romaji] adding Romaji (auto) menu item');
-    frag.appendChild(buildMenuItem("Romaji (auto)", onSelectRomaji, "romaji:auto"));
+    console.log('[romaji] adding Romaji menu item');
+    frag.appendChild(buildMenuItem("Romaji", onSelectRomaji, "romaji:auto"));
   }
   
   const customTracks = await listCustomTracks();
@@ -514,62 +524,39 @@ async function onSelectRomaji() {
       return;
     }
     
-    // Find Japanese track - prefer manual over ASR
+    // Find Japanese track - MANUAL ONLY (no auto-generated)
     let track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-    const isASR = !track;
-    if (!track) {
-      track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode));
-    }
     
     if (!track) {
-      console.log("[romaji] no Japanese track found");
+      console.log("[romaji] no manual Japanese track found");
+      alert('No manual Japanese subtitles found. Auto-generated subtitles are not supported.');
       return;
     }
     
     const trackName = (track.name && track.name.simpleText) || track.languageCode || 'Unknown';
-    const trackType = track.kind === 'asr' ? 'ASR' : 'Manual';
-    console.log(`[romaji] selected track: ${trackName} (${trackType})`);
+    console.log(`[romaji] selected manual track: ${trackName}`);
     
     const vid = getCurrentVideoId();
+    const cached = romanizationCache.get(vid);
     
-    const cacheKey = "cache:" + vid + ":romaji:v30:" + hash(trackName + trackType);
-    console.log("[romaji] cache key:", cacheKey);
-    const cached = await storageGet(cacheKey);
-    console.log("[romaji] cached value exists:", !!cached, "has cues:", !!(cached?.cues));
-    
-    let cues = null;
-    if (cached && cached.cues) {
-      console.log("[romaji] using cached cues:", cached.cues.length);
-      cues = cached.cues;
+    if (cached?.status === 'ready') {
+      console.log('[romaji] using proactively romanized cues');
+      showOverlay(cached.cues);
+    } else if (cached?.status === 'pending') {
+      console.log('[romaji] romanization in progress, pausing video');
+      const video = document.querySelector('video');
+      if (video) video.pause();
+      alert('Subtitles are currently being romanized. Please wait a moment and try again.');
+    } else if (cached?.status === 'error') {
+      console.error('[romaji] proactive romanization failed:', cached.error);
+      alert(`Failed to romanize subtitles: ${cached.error}`);
     } else {
-      // Fetch using sniffed URL strategy
-      const fetchResult = await fetchCaptionsUsingSniff(isASR);
-      
-      if (!fetchResult.ok) {
-        console.error("[romaji] fetch failed:", fetchResult.error);
-        alert(`Failed to load captions: ${fetchResult.error}`);
-        return;
-      }
-      
-      console.log(`[romaji] captions via ${fetchResult.tag}`);
-      
-      // Parse based on detected format
-      cues = parseTimedTextAuto(fetchResult.tag, fetchResult.body);
-      console.log("[romaji] parsed cues:", cues.length);
-      
-      if (cues.length === 0) {
-        console.warn("[romaji] no cues parsed");
-        alert('No captions could be parsed. The video may not have proper caption data.');
-        return;
-      }
-      
-      cues = await romanizeCues(cues);
-      console.log("[romaji] romanized cues:", cues.length);
-      
-      await storageSet({ [cacheKey]: { ts: Date.now(), cues } });
+      console.log('[romaji] no proactive romanization found, starting now');
+      startProactiveRomanization(vid, tracks);
+      const video = document.querySelector('video');
+      if (video) video.pause();
+      alert('Subtitles are being romanized. Please wait a moment and try again.');
     }
-    
-    showOverlay(cues);
     } catch (err) {
       console.error("[romaji] onSelectRomaji error:", err);
       alert('An error occurred while loading captions. Check the console for details.');
@@ -582,16 +569,14 @@ async function onSelectRomaji() {
 }
 
 // Fetch captions using sniffed URL, trying different formats
-async function fetchCaptionsUsingSniff(isASR) {
+async function fetchCaptionsUsingSniff() {
   // Ensure we have a sniffed timedtext URL
   if (!await ensureSniffedTimedtextUrl()) {
     throw new Error('Could not capture YouTube timedtext URL (pot)');
   }
   
-  // Define format strategies based on track type
-  const order = isASR
-    ? [null, 'json3', 'srv3', 'vtt', 'ttml']   // null === as-is
-    : [null, 'vtt', 'ttml', 'json3'];
+  // Format strategies for manual subtitles only
+  const order = [null, 'vtt', 'ttml', 'json3'];  // null === as-is
   
   for (const fmt of order) {
     const url = fmt ? withFmt(lastTimedtextUrl, fmt) : lastTimedtextUrl;
@@ -805,27 +790,42 @@ function parseTtml(ttmlText) {
 
 async function romanizeCues(cues) {
   if (!cues?.length) return cues;
-  console.log('[romaji] romanizing', cues.length, 'cues');
+  console.log('[romaji] romanizing', cues.length, 'cues via API');
   
-  await ensureRomanizer();
+  const videoId = getCurrentVideoId();
+  const fullText = cues.map(c => c.text).join('\n');
   
-  const scrubbed = cues.map(c => scrubCueText(c.text));
-  const results = [];
-  const CHUNK_SIZE = 200;
-  
-  for (let i = 0; i < scrubbed.length; i += CHUNK_SIZE) {
-    const chunk = scrubbed.slice(i, i + CHUNK_SIZE);
-    const resp = await chrome.runtime.sendMessage({ type: 'ROMAJI_CONVERT_BATCH', items: chunk });
-    results.push(...resp.out);
+  try {
+    const response = await fetch('https://youtube-romaji-api.fly.dev/romanize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId, text: fullText })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('[romaji] API response cached:', data.cached);
+    
+    const romanizedLines = data.romanized.split('\n');
+    const r = [];
+    for (let i = 0; i < cues.length; i++) {
+      r.push({ 
+        start: cues[i].start, 
+        end: cues[i].end, 
+        text: romanizedLines[i] || '' 
+      });
+    }
+    
+    console.log('[romaji] romanized', cues.length, 'cues');
+    return r;
+  } catch (error) {
+    console.error('[romaji] API call failed:', error);
+    alert('Failed to romanize subtitles. Please try again later.');
+    return cues;
   }
-  
-  const r = [];
-  for (let i = 0; i < cues.length; i++) {
-    r.push({ start: cues[i].start, end: cues[i].end, text: results[i] });
-  }
-  
-  console.log('[romaji] romanized', cues.length, 'cues');
-  return r;
 }
 
 function splitJapaneseBlocks(s) {

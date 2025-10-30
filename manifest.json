@@ -16,7 +16,7 @@
       "128": "icon128.png"
     }
   },
-  "permissions": ["storage", "offscreen", "scripting"],
+  "permissions": ["storage", "scripting"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://youtu.be/*",
@@ -37,21 +37,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "page-bridge.js",
-        "lib/kuromoji/dict/base.dat.gz",
-        "lib/kuromoji/dict/check.dat.gz",
-        "lib/kuromoji/dict/tid_map.dat.gz",
-        "lib/kuromoji/dict/tid_pos.dat.gz",
-        "lib/kuromoji/dict/tid.dat.gz",
-        "lib/kuromoji/dict/unk_char.dat.gz",
-        "lib/kuromoji/dict/unk_compat.dat.gz",
-        "lib/kuromoji/dict/unk_invoke.dat.gz",
-        "lib/kuromoji/dict/unk_map.dat.gz",
-        "lib/kuromoji/dict/unk_pos.dat.gz",
-        "lib/kuromoji/dict/unk.dat.gz",
-        "lib/kuromoji.min.js",
-        "lib/kuroshiro.min.js",
-        "lib/kuroshiro-analyzer.min.js"
+        "page-bridge.js"
       ],
       "matches": ["<all_urls>"]
     }

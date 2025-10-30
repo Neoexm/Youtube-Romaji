@@ -186,74 +186,11 @@ if (chrome.alarms && chrome.alarms.onAlarm) {
   });
 }
 
-// === BEGIN ROMAJI OFFSCREEN BRIDGE ===
-let hasOffscreen = false;
-let offscreenReady = false;
-const pending = [];
-
-async function ensureOffscreen() {
-  if (hasOffscreen) return;
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    reasons: ['DOM_SCRAPING'],
-    justification: 'Kuroshiro romanization in offscreen context'
-  });
-  hasOffscreen = true;
-  offscreenReady = false;
-  console.log('[bg] offscreen created');
-}
-
-function flushPending() {
-  while (pending.length) {
-    const { message, resolve } = pending.shift();
-    chrome.runtime.sendMessage(message)
-      .then(resolve)
-      .catch(e => resolve({ ok: false, error: String(e) }));
-  }
-}
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || !msg.type) return;
-
-  if (msg.type === 'ROMAJI_OFFSCREEN_READY') {
-    offscreenReady = true;
-    console.log('[bg] offscreen ready');
-    flushPending();
-    return;
-  }
-
-  if (msg.type === 'ROMAJI_OFFSCREEN_ERROR') {
-    console.error('[bg] offscreen error:', msg.error);
-    return;
-  }
-});
-
-async function forwardToOffscreen(message) {
-  await ensureOffscreen();
-  if (!offscreenReady) {
-    return new Promise(resolve => pending.push({ message, resolve }));
-  }
-  try {
-    return await chrome.runtime.sendMessage(message);
-  } catch (e) {
-    console.warn('[bg] recreate offscreen after error:', e);
-    try { await chrome.offscreen.closeDocument(); } catch {}
-    hasOffscreen = false;
-    offscreenReady = false;
-    await ensureOffscreen();
-    return new Promise(resolve => pending.push({ message, resolve }));
-  }
-}
+// Kuromoji offscreen bridge removed - now using API
 
 if (chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((msg, sender, send) => {
     if (!msg || !msg.type) return;
-    
-    if (msg.type === 'ROMAJI_INIT' || msg.type === 'ROMAJI_CONVERT_BATCH') {
-      forwardToOffscreen(msg).then(send);
-      return true;
-    }
-// === END ROMAJI OFFSCREEN BRIDGE ===
     
     if (msg.type === 'FETCH_TIMEDTEXT_RAW') {
       console.log('[bg] received FETCH_TIMEDTEXT_RAW request');
