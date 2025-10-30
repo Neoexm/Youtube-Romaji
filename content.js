@@ -532,7 +532,7 @@ async function onSelectRomaji() {
     
     const vid = getCurrentVideoId();
     
-    const cacheKey = "cache:" + vid + ":romaji:v29:" + hash(trackName + trackType);
+    const cacheKey = "cache:" + vid + ":romaji:v30:" + hash(trackName + trackType);
     console.log("[romaji] cache key:", cacheKey);
     const cached = await storageGet(cacheKey);
     console.log("[romaji] cached value exists:", !!cached, "has cues:", !!(cached?.cues));
@@ -811,8 +811,8 @@ async function romanizeCues(cues) {
   
   const scrubbed = cues.map(c => scrubCueText(c.text));
   const results = [];
-  
   const CHUNK_SIZE = 200;
+  
   for (let i = 0; i < scrubbed.length; i += CHUNK_SIZE) {
     const chunk = scrubbed.slice(i, i + CHUNK_SIZE);
     const resp = await chrome.runtime.sendMessage({ type: 'ROMAJI_CONVERT_BATCH', items: chunk });

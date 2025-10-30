@@ -14,10 +14,15 @@ init();
 
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const url = new URL(tab.url);
-  const vParam = url.searchParams.get("v");
-  const shorts = url.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
-  const videoId = vParam || (shorts ? shorts[1] : null);
+  let videoId = null;
+  try {
+    const url = new URL(tab.url);
+    const vParam = url.searchParams.get("v");
+    const shorts = url.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
+    videoId = vParam || (shorts ? shorts[1] : null);
+  } catch (err) {
+    videoId = null;
+  }
 
   ctx = { tabId: tab.id, videoId };
   vidEl.textContent = videoId ? `Video ID: ${videoId}` : "No video detected";
@@ -29,6 +34,24 @@ async function init() {
 
   fileEl.addEventListener("change", onFileChosen);
   saveEl.addEventListener("click", onSave);
+  
+  const clearCacheBtn = document.getElementById("clear-cache");
+  clearCacheBtn.addEventListener("click", async () => {
+    if (!confirm("Clear all romanization cache? This will not delete custom subtitles.")) {
+      return;
+    }
+    
+    const all = await chrome.storage.local.get(null);
+    const cacheKeys = Object.keys(all).filter(k => k.startsWith("cache:"));
+    
+    if (cacheKeys.length === 0) {
+      setStatus("No cache to clear", false);
+      return;
+    }
+    
+    await chrome.storage.local.remove(cacheKeys);
+    setStatus(`Cleared ${cacheKeys.length} cached items`, false);
+  });
 }
 
 function getTabTitle(tabId) {
