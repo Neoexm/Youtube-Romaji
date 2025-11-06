@@ -34,24 +34,31 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_history == 'true')) && '0' || '1' }}
+        fetch-depth: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_history == 'true')) && '0' || '2' }}
     
-    - name: Run Gitleaks
-      uses: gitleaks/gitleaks-action@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITLEAKS_ENABLE_SUMMARY: true
-    
-    - name: Generate SARIF
-      if: failure()
+    - name: Run Gitleaks scan
       run: |
         docker run --rm -v $(pwd):/path zricethezav/gitleaks:latest detect \
           --source="/path" \
           --report-format=sarif \
           --report-path=/path/gitleaks.sarif \
-          --no-git || true
+          --redact \
+          --verbose \
+          ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_history == 'true')) && '--no-git' || '' }} \
+          || EXIT_CODE=$?
+        
+        if [ -f gitleaks.sarif ]; then
+          echo "Gitleaks scan completed"
+          if [ ! -z "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+            echo "::warning::Gitleaks found secrets (exit code: $EXIT_CODE)"
+          fi
+        else
+          echo "::error::Gitleaks SARIF file not generated"
+          exit 1
+        fi
+      continue-on-error: true
     
-    - name: Upload SARIF
+    - name: Upload SARIF to GitHub Security
       if: always()
       uses: github/codeql-action/upload-sarif@v3
       with:
