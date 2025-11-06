@@ -138,6 +138,14 @@ function withFmt(urlStr, fmt) {
 // Fetch raw text with proper cookies/referrer (content context)
 async function fetchRaw(url) {
   try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.hostname !== 'www.youtube.com') {
+      throw new Error('Invalid hostname - only youtube.com allowed');
+    }
+    if (!parsedUrl.pathname.includes('/api/timedtext')) {
+      throw new Error('Invalid path - only timedtext API allowed');
+    }
+    
     const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
     const text = await res.text();
     const ok = res.ok && text.trim().length > 0;
@@ -196,6 +204,11 @@ async function startProactiveRomanization(videoId, tracks) {
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || d.source !== 'romaji-bridge') return;
+  
+  if (e.origin !== 'https://www.youtube.com') {
+    console.warn('[romaji] rejected message from untrusted origin:', e.origin);
+    return;
+  }
   
   if (d.type === 'YT_STATE') {
     lastVideoId = d.videoId || lastVideoId;

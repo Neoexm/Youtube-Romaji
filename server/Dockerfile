@@ -31,8 +31,15 @@ COPY . .
 # Final stage for app image
 FROM base
 
+# Create non-root user for security
+RUN useradd -m -u 1001 appuser && \
+    chown -R appuser:appuser /app
+
 # Copy built application
-COPY --from=build /app /app
+COPY --from=build --chown=appuser:appuser /app /app
+
+# Switch to non-root user
+USER appuser
 
 # Start the server by default, this can be overwritten at runtime
 EXPOSE 3000

@@ -60,7 +60,9 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  const sanitizedPath = (req.path || '').replace(/\n|\r/g, '');
+  const sanitizedMethod = (req.method || '').replace(/\n|\r/g, '');
+  console.log(`[${new Date().toISOString()}] ${sanitizedMethod} ${sanitizedPath}`);
   next();
 });
 
@@ -75,25 +77,28 @@ app.get('/health', (req, res) => {
 async function fetchYouTubeTitle(videoId) {
   // Method 1: Try ytdl-core first
   try {
-    console.log(`[youtube] Method 1: trying ytdl-core for ${videoId}`);
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
+    console.log(`[youtube] Method 1: trying ytdl-core for ${sanitizedVideoId}`);
+    const videoUrl = `https://www.youtube.com/watch?v=${sanitizedVideoId}`;
     const info = await ytdl.getInfo(videoUrl);
-    const title = info.videoDetails.title;
-    const description = info.videoDetails.description;
+    const title = (info.videoDetails.title || '').replace(/\n|\r/g, ' ');
+    const description = (info.videoDetails.description || '').replace(/\n|\r/g, ' ');
     console.log(`[youtube] ✓ ytdl-core success: ${title}`);
     console.log(`[youtube] description preview: ${description?.substring(0, 100)}...`);
     return { ok: true, title, description, method: 'ytdl-core' };
   } catch (error) {
-    console.error(`[youtube] ✗ ytdl-core failed - Status: ${error.statusCode || 'N/A'}, Message: ${error.message}`);
+    const sanitizedMessage = (error.message || '').replace(/\n|\r/g, ' ');
+    console.error(`[youtube] ✗ ytdl-core failed - Status: ${error.statusCode || 'N/A'}, Message: ${sanitizedMessage}`);
   }
 
   // Method 2: Try YouTube oEmbed API (no API key required!)
   try {
     console.log(`[youtube] Method 2: trying oEmbed API`);
-    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+    const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
+    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${sanitizedVideoId}&format=json`;
     const response = await axios.get(oembedUrl, { timeout: 5000 });
-    const title = response.data.title;
-    const author = response.data.author_name;
+    const title = (response.data.title || '').replace(/\n|\r/g, ' ');
+    const author = (response.data.author_name || '').replace(/\n|\r/g, ' ');
     
     if (title) {
       console.log(`[youtube] ✓ oEmbed success: ${title}`);
@@ -101,30 +106,34 @@ async function fetchYouTubeTitle(videoId) {
       return { ok: true, title, author, method: 'oembed' };
     }
   } catch (error) {
-    console.error(`[youtube] ✗ oEmbed failed: ${error.message}`);
+    const sanitizedMessage = (error.message || '').replace(/\n|\r/g, ' ');
+    console.error(`[youtube] ✗ oEmbed failed: ${sanitizedMessage}`);
   }
 
   // Method 3: Try YouTube Data API v3 if configured
   if (process.env.YOUTUBE_API_KEY) {
     try {
       console.log(`[youtube] Method 3: trying YouTube Data API v3`);
-      const apiUrl = `https://www.googleapis.com/youtube/v3/videos?id=${videoId}&key=${process.env.YOUTUBE_API_KEY}&part=snippet`;
+      const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
+      const apiUrl = `https://www.googleapis.com/youtube/v3/videos?id=${sanitizedVideoId}&key=${process.env.YOUTUBE_API_KEY}&part=snippet`;
       const response = await axios.get(apiUrl, { timeout: 5000 });
       const snippet = response.data.items?.[0]?.snippet;
       
       if (snippet) {
-        const title = snippet.title;
-        const description = snippet.description;
+        const title = (snippet.title || '').replace(/\n|\r/g, ' ');
+        const description = (snippet.description || '').replace(/\n|\r/g, ' ');
         console.log(`[youtube] ✓ API v3 success: ${title}`);
         console.log(`[youtube] description preview: ${description?.substring(0, 100)}...`);
         return { ok: true, title, description, method: 'api-v3' };
       }
     } catch (error) {
-      console.error(`[youtube] ✗ API v3 failed: ${error.message}`);
+      const sanitizedMessage = (error.message || '').replace(/\n|\r/g, ' ');
+      console.error(`[youtube] ✗ API v3 failed: ${sanitizedMessage}`);
     }
   }
 
-  console.error(`[youtube] ✗ All methods failed for ${videoId}`);
+  const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
+  console.error(`[youtube] ✗ All methods failed for ${sanitizedVideoId}`);
   return { ok: false, error: 'All YouTube metadata fetch methods failed' };
 }
 
@@ -144,7 +153,9 @@ function cleanSongTitle(rawTitle) {
   // Clean up extra whitespace
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   
-  console.log(`[youtube] cleaned title: "${rawTitle}" -> "${cleaned}"`);
+  const sanitizedRaw = (rawTitle || '').replace(/\n|\r/g, ' ');
+  const sanitizedCleaned = (cleaned || '').replace(/\n|\r/g, ' ');
+  console.log(`[youtube] cleaned title: "${sanitizedRaw}" -> "${sanitizedCleaned}"`);
   return cleaned;
 }
 
@@ -154,7 +165,8 @@ function cleanSongTitle(rawTitle) {
 
 async function performGeniusSearch(query, originalTitle = null) {
   const searchUrl = `https://genius.com/api/search/multi?q=${encodeURIComponent(query)}`;
-  console.log(`[genius] trying query: "${query}"`);
+  const sanitizedQuery = (query || '').replace(/\n|\r/g, ' ');
+  console.log(`[genius] trying query: "${sanitizedQuery}"`);
   
   const response = await axios.get(searchUrl, {
     headers: {
@@ -185,12 +197,15 @@ async function performGeniusSearch(query, originalTitle = null) {
   
   // Log results
   hits.slice(0, 5).forEach((hit, i) => {
-    console.log(`[genius]   ${i + 1}. "${hit.result?.title}" by ${hit.result?.primary_artist?.name}`);
+    const sanitizedTitle = (hit.result?.title || '').replace(/\n|\r/g, ' ');
+    const sanitizedArtist = (hit.result?.primary_artist?.name || '').replace(/\n|\r/g, ' ');
+    console.log(`[genius]   ${i + 1}. "${sanitizedTitle}" by ${sanitizedArtist}`);
   });
   
   // If we have originalTitle, find best match by title similarity
   if (originalTitle && hits.length > 1) {
-    console.log(`[genius] comparing against original title: "${originalTitle}"`);
+    const sanitizedOriginal = (originalTitle || '').replace(/\n|\r/g, ' ');
+    console.log(`[genius] comparing against original title: "${sanitizedOriginal}"`);
     
     // Romanize original title if it's Japanese for better matching
     let comparisonTitle = originalTitle;
@@ -221,12 +236,11 @@ async function performGeniusSearch(query, originalTitle = null) {
     // Sort by similarity descending
     scoredHits.sort((a, b) => b.similarity - a.similarity);
     
-    // Log similarity scores
-    scoredHits.slice(0, 3).forEach((item, i) => {
-      console.log(`[genius]   match ${i + 1}: "${item.title}" (${(item.similarity * 100).toFixed(1)}% similar)`);
-    });
-    
-    // Return best match if it's reasonably similar
+  // Log similarity scores
+  scoredHits.slice(0, 3).forEach((item, i) => {
+    const sanitizedTitle = (item.title || '').replace(/\n|\r/g, ' ');
+    console.log(`[genius]   match ${i + 1}: "${sanitizedTitle}" (${(item.similarity * 100).toFixed(1)}% similar)`);
+  });    // Return best match if it's reasonably similar
     if (scoredHits[0].similarity > 0.2) {
       console.log(`[genius] selected best match by title similarity`);
       return scoredHits[0].hit;
@@ -238,7 +252,8 @@ async function performGeniusSearch(query, originalTitle = null) {
 
 async function searchGeniusForSong(songTitle) {
   try {
-    console.log(`[genius] 🔍 searching for: "${songTitle}"`);
+    const sanitizedTitle = (songTitle || '').replace(/\n|\r/g, ' ');
+    console.log(`[genius] 🔍 searching for: "${sanitizedTitle}"`);
     
     // Strategy 1: Try original title first
     let result = await performGeniusSearch(songTitle, songTitle);
@@ -260,7 +275,9 @@ async function searchGeniusForSong(songTitle) {
             romajiSystem: 'hepburn'
           });
           
-          console.log(`[genius] romanized: "${songTitle}" → "${romanizedTitle}"`);
+          const sanitizedSongTitle = (songTitle || '').replace(/\n|\r/g, ' ');
+          const sanitizedRomanized = (romanizedTitle || '').replace(/\n|\r/g, ' ');
+          console.log(`[genius] romanized: "${sanitizedSongTitle}" → "${sanitizedRomanized}"`);
           result = await performGeniusSearch(romanizedTitle, songTitle);
         } catch (error) {
           console.log(`[genius] romanization failed: ${error.message}`);
@@ -276,7 +293,8 @@ async function searchGeniusForSong(songTitle) {
         const artistName = titleMatch[1].trim();
         const songPart = titleMatch[2].trim();
         
-        console.log(`[genius] trying "genius romanizations" pattern with artist: "${artistName}"`);
+        const sanitizedArtist = (artistName || '').replace(/\n|\r/g, ' ');
+        console.log(`[genius] trying "genius romanizations" pattern with artist: "${sanitizedArtist}"`);
         
         // Try romanizing artist name if Japanese
         let searchArtist = artistName;
@@ -289,9 +307,12 @@ async function searchGeniusForSong(songTitle) {
               mode: 'spaced',
               romajiSystem: 'hepburn'
             });
-            console.log(`[genius] romanized artist: "${artistName}" → "${searchArtist}"`);
+            const sanitizedArtistName = (artistName || '').replace(/\n|\r/g, ' ');
+            const sanitizedSearchArtist = (searchArtist || '').replace(/\n|\r/g, ' ');
+            console.log(`[genius] romanized artist: "${sanitizedArtistName}" → "${sanitizedSearchArtist}"`);
           } catch (error) {
-            console.log(`[genius] artist romanization failed: ${error.message}`);
+            const sanitizedMessage = (error.message || '').replace(/\n|\r/g, ' ');
+            console.log(`[genius] artist romanization failed: ${sanitizedMessage}`);
           }
         }
         
@@ -342,8 +363,11 @@ async function searchGeniusForSong(songTitle) {
       return { ok: false, reason: 'no_url' };
     }
     
-    console.log(`[genius] ✓ selected: "${songTitleResult}" by ${artistName}`);
-    console.log(`[genius] ✓ URL: ${songUrl}`);
+    const sanitizedSongTitle = (songTitleResult || '').replace(/\n|\r/g, ' ');
+    const sanitizedArtistName = (artistName || '').replace(/\n|\r/g, ' ');
+    const sanitizedUrl = (songUrl || '').replace(/\n|\r/g, ' ');
+    console.log(`[genius] ✓ selected: "${sanitizedSongTitle}" by ${sanitizedArtistName}`);
+    console.log(`[genius] ✓ URL: ${sanitizedUrl}`);
     
     return {
       ok: true,
@@ -352,10 +376,10 @@ async function searchGeniusForSong(songTitle) {
       artist: artistName
     };
   } catch (error) {
-    console.error(`[genius] ✗ search error:`, error.message);
+    const sanitizedMessage = (error.message || '').replace(/\n|\r/g, ' ');
+    console.error(`[genius] ✗ search error:`, sanitizedMessage);
     if (error.response) {
       console.error(`[genius] response status: ${error.response.status}`);
-      console.error(`[genius] response data:`, error.response.data);
     }
     return { ok: false, reason: 'search_error', error: error.message };
   }
@@ -367,14 +391,16 @@ async function searchGeniusForSong(songTitle) {
 
 async function fetchGeniusLyricsViaApify(geniusUrl) {
   try {
-    console.log(`[apify] 📥 fetching lyrics from: ${geniusUrl}`);
+    const sanitizedUrl = (geniusUrl || '').replace(/\n|\r/g, ' ');
+    console.log(`[apify] 📥 fetching lyrics from: ${sanitizedUrl}`);
     
     if (!APIFY_API_TOKEN) {
       console.error(`[apify] ✗ API token not configured`);
       return { ok: false, reason: 'no_api_token' };
     }
     
-    console.log(`[apify] using actor: ${APIFY_ACTOR_ID}`);
+    const sanitizedActorId = (APIFY_ACTOR_ID || '').replace(/\n|\r/g, ' ');
+    console.log(`[apify] using actor: ${sanitizedActorId}`);
     
     // Start the Apify actor run (epctex/genius-scraper format)
     const runResponse = await axios.post(
@@ -861,7 +887,8 @@ function alignByPosition(geniusLyrics, subtitleLines) {
 // ============================================================================
 
 async function romanizeWithGeniusReference(japaneseText, geniusLyrics = null) {
-  console.log(`[llm] romanizing with ${geniusLyrics ? 'Genius reference' : 'NO reference'}`);
+  const referenceStatus = geniusLyrics ? 'Genius reference' : 'NO reference';
+  console.log(`[llm] romanizing with ${referenceStatus}`);
   
   try {
     const lineCount = japaneseText.split('\n').length;
@@ -904,7 +931,8 @@ app.post('/romanize', async (req, res) => {
       return res.status(400).json({ error: 'Invalid request. Provide videoId and text.' });
     }
 
-    console.log(`[romanize] videoId: ${videoId}, text length: ${text.length}`);
+    const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
+    console.log(`[romanize] videoId: ${sanitizedVideoId}, text length: ${text.length}`);
 
     // Check cache first
     const { data: cached, error: cacheError } = await supabase
@@ -914,7 +942,7 @@ app.post('/romanize', async (req, res) => {
       .single();
 
     if (cached && !cacheError) {
-      console.log(`[romanize] cache HIT for ${videoId}`);
+      console.log(`[romanize] cache HIT for ${sanitizedVideoId}`);
       const response = { romanized: cached.romanized_text, cached: true };
       if (cached.vtt) response.vtt = cached.vtt;
       if (cached.segments) response.segments = cached.segments;
@@ -922,10 +950,10 @@ app.post('/romanize', async (req, res) => {
       return res.json(response);
     }
 
-    console.log(`[romanize] cache MISS for ${videoId}, attempting to acquire lock...`);
+    console.log(`[romanize] cache MISS for ${sanitizedVideoId}, attempting to acquire lock...`);
 
     // Acquire distributed lock
-    const { data: lockResult, error: lockError } = await supabase
+    const { error: lockError } = await supabase
       .from('romanized_cache')
       .insert([{
         video_id: videoId,
@@ -936,7 +964,7 @@ app.post('/romanize', async (req, res) => {
 
     if (lockError) {
       if (lockError.code === '23505') {
-        console.log(`[romanize] race condition detected for ${videoId}, another request is processing`);
+        console.log(`[romanize] race condition detected for ${sanitizedVideoId}, another request is processing`);
         
         let retries = 0;
         while (retries < 30) {
@@ -949,7 +977,7 @@ app.post('/romanize', async (req, res) => {
             .single();
           
           if (retryCheck && retryCheck.romanized_text !== 'PROCESSING') {
-            console.log(`[romanize] processing complete by another request for ${videoId}`);
+            console.log(`[romanize] processing complete by another request for ${sanitizedVideoId}`);
             return res.json({ romanized: retryCheck.romanized_text, cached: true });
           }
           
@@ -962,7 +990,7 @@ app.post('/romanize', async (req, res) => {
       throw lockError;
     }
 
-    console.log(`[romanize] lock acquired for ${videoId}`);
+    console.log(`[romanize] lock acquired for ${sanitizedVideoId}`);
 
     // Start romanization process
     let romanized = null;
@@ -978,7 +1006,8 @@ app.post('/romanize', async (req, res) => {
       
       if (titleResult.ok) {
         const cleanedTitle = cleanSongTitle(titleResult.title);
-        console.log(`[romanize] searching Genius for: "${cleanedTitle}"`);
+        const sanitizedCleanedTitle = (cleanedTitle || '').replace(/\n|\r/g, ' ');
+        console.log(`[romanize] searching Genius for: "${sanitizedCleanedTitle}"`);
         
         // 1b. Search Genius
         const searchResult = await searchGeniusForSong(cleanedTitle);
@@ -1007,7 +1036,8 @@ app.post('/romanize', async (req, res) => {
       romanized = llmResult.romanized;
       source = llmResult.source;
       
-      console.log(`[romanize] ✓✓✓ Romanization complete (source: ${source})`);
+      const sanitizedSource = (source || '').replace(/\n|\r/g, '');
+      console.log(`[romanize] ✓✓✓ Romanization complete (source: ${sanitizedSource})`);
       
       // Update cache with result
       await supabase
@@ -1019,7 +1049,7 @@ app.post('/romanize', async (req, res) => {
         })
         .eq('video_id', videoId);
 
-      console.log(`[romanize] ✓ cached result for ${videoId} (source: ${source})`);
+      console.log(`[romanize] ✓ cached result for ${sanitizedVideoId} (source: ${sanitizedSource})`);
 
       res.json({
         romanized,
@@ -1069,7 +1099,8 @@ app.post('/romaji/upsertTimed', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: videoId, vtt, segments' });
     }
     
-    console.log(`[upsertTimed] upserting timed romaji for ${videoId}, segments: ${segments.length}`);
+    const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
+    console.log(`[upsertTimed] upserting timed romaji for ${sanitizedVideoId}, segments: ${segments.length}`);
     
     const romanizedText = segments.map(s => s.text).join('\n');
     
@@ -1096,7 +1127,7 @@ app.post('/romaji/upsertTimed', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
     
-    console.log(`[upsertTimed] successfully upserted timed romaji for ${videoId}`);
+    console.log(`[upsertTimed] successfully upserted timed romaji for ${sanitizedVideoId}`);
     res.json({ ok: true, message: 'Timed romaji saved successfully' });
   } catch (error) {
     console.error('[upsertTimed] error:', error);
