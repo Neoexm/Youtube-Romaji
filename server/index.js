@@ -218,7 +218,8 @@ async function performGeniusSearch(query, originalTitle = null) {
         });
         console.log(`[genius] romanized comparison title: "${comparisonTitle}"`);
       } catch (error) {
-        console.log(`[genius] couldn't romanize title for comparison: ${error.message}`);
+        const sanitizedError = (error.message || '').replace(/\n|\r/g, ' ');
+        console.log(`[genius] couldn't romanize title for comparison: ${sanitizedError}`);
       }
     }
     
@@ -280,7 +281,8 @@ async function searchGeniusForSong(songTitle) {
           console.log(`[genius] romanized: "${sanitizedSongTitle}" → "${sanitizedRomanized}"`);
           result = await performGeniusSearch(romanizedTitle, songTitle);
         } catch (error) {
-          console.log(`[genius] romanization failed: ${error.message}`);
+          const sanitizedError = (error.message || '').replace(/\n|\r/g, ' ');
+          console.log(`[genius] romanization failed: ${sanitizedError}`);
         }
       }
     }
@@ -338,7 +340,8 @@ async function searchGeniusForSong(songTitle) {
               console.log(`[genius] extracted keywords from song title: "${searchKeywords.trim()}"`);
             }
           } catch (error) {
-            console.log(`[genius] song title romanization failed: ${error.message}`);
+            const sanitizedError = (error.message || '').replace(/\n|\r/g, ' ');
+            console.log(`[genius] song title romanization failed: ${sanitizedError}`);
           }
         }
         
@@ -500,8 +503,9 @@ async function fetchGeniusLyricsViaApify(geniusUrl) {
       artistName: lyricsData.primaryArtist || ''
     };
   } catch (error) {
-    console.error(`[apify] fetch error:`, error.message);
-    return { ok: false, reason: 'fetch_error', error: error.message };
+    const sanitizedError = (error.message || '').replace(/\n|\r/g, ' ');
+    console.error(`[apify] fetch error:`, sanitizedError);
+    return { ok: false, reason: 'fetch_error', error: sanitizedError };
   }
 }
 
@@ -912,7 +916,8 @@ async function romanizeWithGeniusReference(japaneseText, geniusLyrics = null) {
       source: geniusLyrics ? 'llm-genius-guided' : 'llm-only'
     };
   } catch (error) {
-    console.error(`[llm] ✗ romanization error:`, error.message);
+    const sanitizedError = (error.message || '').replace(/\n|\r/g, ' ');
+    console.error(`[llm] ✗ romanization error:`, sanitizedError);
     throw error;
   }
 }
