@@ -1,0 +1,62 @@
+name: Semgrep Security Scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.js'
+      - '**.json'
+      - '.github/workflows/**'
+      - 'server/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.js'
+      - '**.json'
+      - '.github/workflows/**'
+      - 'server/**'
+  schedule:
+    - cron: '45 2 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    container:
+      image: semgrep/semgrep
+    
+    if: github.actor != 'dependabot[bot]'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Run Semgrep
+      run: |
+        semgrep scan \
+          --config=auto \
+          --config=p/javascript \
+          --config=p/nodejs \
+          --config=p/ci \
+          --sarif \
+          --output=semgrep.sarif
+      continue-on-error: true
+    
+    - name: Upload SARIF to GitHub
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: semgrep.sarif
+        category: semgrep
+      if: always()

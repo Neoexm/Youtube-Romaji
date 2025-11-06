@@ -1,0 +1,54 @@
+name: WebExtension Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'manifest.json'
+      - '*.js'
+      - '*.html'
+      - '*.css'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'manifest.json'
+      - '*.js'
+      - '*.html'
+      - '*.css'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint WebExtension
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Install web-ext
+      run: npm install -g web-ext
+    
+    - name: Lint extension
+      run: |
+        web-ext lint \
+          --source-dir=. \
+          --ignore-files="server/**" \
+          --ignore-files="node_modules/**" \
+          --ignore-files=".git/**" \
+          --ignore-files=".github/**" \
+          --ignore-files="tools/**" \
+          --ignore-files=".roo/**" \
+          --warnings-as-errors

@@ -1,0 +1,45 @@
+{
+  "env": {
+    "browser": true,
+    "es2021": true,
+    "node": true,
+    "webextensions": true
+  },
+  "extends": [
+    "eslint:recommended"
+  ],
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "rules": {
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "no-script-url": "error",
+    "no-alert": "warn",
+    "no-console": "off",
+    "no-debugger": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["server/**/*.js"],
+      "env": {
+        "node": true,
+        "browser": false
+      },
+      "rules": {
+        "no-process-env": "off"
+      }
+    },
+    {
+      "files": ["*.js"],
+      "excludedFiles": ["server/**/*.js"],
+      "env": {
+        "browser": true,
+        "webextensions": true,
+        "node": false
+      }
+    }
+  ]
+}
