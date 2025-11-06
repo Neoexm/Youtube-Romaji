@@ -1,0 +1,4 @@
+faster-whisper>=1.0.0
+pykakasi>=2.2.1
+yt-dlp>=2023.0.0
+pytube>=15.0.0

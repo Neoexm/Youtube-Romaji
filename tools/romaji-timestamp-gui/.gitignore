@@ -1,0 +1,11 @@
+node_modules/
+dist/
+output/
+secrets.local.json
+*.log
+env/
+venv/
+__pycache__/
+*.pyc
+tools/**
+.roo/

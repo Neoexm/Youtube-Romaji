@@ -977,18 +977,81 @@ async function romanizeCues(cues) {
     const data = await response.json();
     console.log('[romaji] API response cached:', data.cached);
     
+    const isTimed = data.timed && (data.vtt || data.segments);
+    if (isTimed) {
+      console.log('[romaji] using DB-timed romaji');
+      
+      if (data.vtt && data.segments) {
+        console.log('[romaji] both vtt and segments present, preferring vtt');
+        const timedCues = parseVtt(data.vtt);
+        if (timedCues.length > 0) {
+          console.log('[romaji] parsed', timedCues.length, 'timed cues from vtt');
+          return timedCues;
+        }
+        console.log('[romaji] vtt parsing failed, falling back to segments');
+      }
+      
+      if (data.vtt) {
+        const timedCues = parseVtt(data.vtt);
+        if (timedCues.length > 0) {
+          console.log('[romaji] parsed', timedCues.length, 'timed cues from vtt');
+          return timedCues;
+        }
+      }
+      
+      if (data.segments && Array.isArray(data.segments)) {
+        console.log('[romaji] using', data.segments.length, 'timed segments');
+        return data.segments.map(s => ({
+          start: s.start,
+          end: s.end,
+          text: s.text
+        }));
+      }
+      
+      console.warn('[romaji] timed flag set but no valid vtt or segments, falling back to untimed');
+    }
+    
     const romanizedLines = data.romanized.split('\n');
     const r = [];
     for (let i = 0; i < cues.length; i++) {
-      r.push({ 
-        start: cues[i].start, 
-        end: cues[i].end, 
-        text: romanizedLines[i] || '' 
+      r.push({
+        start: cues[i].start,
+        end: cues[i].end,
+        text: romanizedLines[i] || ''
       });
     }
     
-    console.log('[romaji] romanized', cues.length, 'cues');
-    return r;
+    // Merge consecutive cues with identical text to prevent flicker
+    const merged = [];
+    for (let i = 0; i < r.length; i++) {
+      const cue = r[i];
+      
+      // Skip empty cues
+      if (!cue.text || cue.text.trim() === '') {
+        continue;
+      }
+      
+      // Check if next cue has the same text (continuation/timing split)
+      let endTime = cue.end;
+      while (i + 1 < r.length && r[i + 1].text === cue.text) {
+        // Extend end time to include next cue
+        endTime = r[i + 1].end;
+        i++; // Skip the duplicate cue
+      }
+      
+      merged.push({
+        start: cue.start,
+        end: endTime,
+        text: cue.text
+      });
+    }
+    
+    if (merged.length < r.length) {
+      console.log(`[romaji] merged ${r.length} cues → ${merged.length} (removed ${r.length - merged.length} duplicate continuation cues)`);
+    }
+    
+    console.log('[romaji] romanized', cues.length, 'cues →', merged.length, 'after merging duplicates');
+    return merged;
   } catch (error) {
     console.error('[romaji] API call failed:', error);
     alert('Failed to romanize subtitles. Please try again later.');

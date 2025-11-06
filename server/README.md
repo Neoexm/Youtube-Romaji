@@ -1,79 +1,93 @@
 # Romaji API Server
 
-Express API server that romanizes Japanese text using OpenAI GPT-5 with Supabase caching.
+Express API server that romanizes Japanese text using Genius-guided OpenAI GPT with Supabase caching.
 
-## Setup
+## Architecture
 
-### 1. Supabase Database Setup
+The server uses a hybrid approach combining Genius lyrics as a reference with LLM romanization:
 
-Create a table in your Supabase project:
+1. **Cache Check** - Check Supabase for existing romanization
+2. **YouTube Metadata** - Extract video title for song identification
+3. **Genius Lyrics Fetch** (Optional) - Retrieve romanized lyrics as reference
+   - Search Genius.com for the song
+   - Scrape lyrics via Apify Actor
+4. **LLM Romanization** - Use OpenAI GPT with Genius reference (when available)
+5. **Cache Storage** - Store result in Supabase for future requests
 
-```sql
-CREATE TABLE romanized_cache (
-  id BIGSERIAL PRIMARY KEY,
-  video_id TEXT UNIQUE NOT NULL,
-  romanized_text TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
+### Cost Optimization
 
-CREATE INDEX idx_video_id ON romanized_cache(video_id);
-```
+- **With Genius Reference**: ~$0.015 per video (OpenAI + Apify)
+- **Without Genius**: ~$0.014 per video (OpenAI only)
+- **Cached Requests**: $0.00 (database lookup only)
+- **Genius Benefit**: Improved romanization consistency and style matching
 
-### 2. Environment Variables
+## How It Works
 
-Copy `.env.example` to `.env` and fill in:
-- `OPENAI_API_KEY` - Your OpenAI API key
-- `SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_KEY` - Your Supabase anon/public key
+### 1. YouTube Title Extraction
 
-### 3. Install Dependencies
+Uses multiple fallback methods to fetch video metadata:
+- **ytdl-core**: Primary method for extracting video details
+- **oEmbed API**: Fallback method (no API key required)
+- **YouTube Data API v3**: Optional fallback if API key configured
 
-```bash
-npm install
-```
+The title is cleaned to remove common artifacts:
+- Removes YouTube metadata: `【】`, `[]`, `(Official Video)`, etc.
+- Extracts song name from formats like "Artist - Song Title"
+- Handles Japanese characters and mixed formats
 
-### 4. Run Locally
+### 2. Genius Lyrics Fetch (Optional)
 
-```bash
-npm start
-```
+Attempts to find and retrieve romanized lyrics as a reference:
 
-### 5. Deploy to Fly.io
+**Multi-Strategy Search:**
+1. Search with original title
+2. If Japanese, romanize and search again
+3. Try "genius romanizations [artist] [keywords]" pattern
 
-```bash
-fly launch
-fly secrets set OPENAI_API_KEY=your_key_here
-fly secrets set SUPABASE_URL=your_url_here
-fly secrets set SUPABASE_KEY=your_key_here
-fly deploy
-```
+**Apify Scraping:**
+- Uses the epctex/genius-scraper actor
+- Polls for completion (max 30 seconds)
+- Extracts and cleans HTML lyrics
+- Filters out section markers (`[Verse 1]`, `[Chorus]`, etc.)
 
-## API Endpoints
+### 3. Genius-Guided LLM Romanization
 
-### GET /health
-Health check endpoint.
+The core romanization uses OpenAI with a specialized prompt:
 
-### POST /romanize
-Romanize Japanese text.
+**System Prompt:**
+- Japanese romanization specialist
+- Hepburn romanization system
+- Uses Genius lyrics as style guide (when available)
+- Maintains exact line count
+- Handles edge cases naturally
 
-**Request:**
-```json
-{
-  "videoId": "dQw4w9WgXcQ",
-  "text": "きみがどんなときも　あたし側にいるわ"
-}
-```
+**User Prompt Variables:**
+- `japanese_captions`: Original Japanese subtitle text
+- `genius_romanized`: Genius lyrics OR "Not available"
+- `line_count`: Number of input lines for validation
 
-**Response:**
-```json
-{
-  "romanized": "kimi ga donna toki mo atashi soba ni iru wa",
-  "cached": false
-}
-```
+**LLM Benefits:**
+- Handles credit lines (e.g., "ーツユ" artist tags)
+- Manages timing splits naturally
+- Consistent romanization style with Genius reference
+- Works perfectly without Genius
+- No complex alignment algorithms needed
 
-## Caching Strategy
+### 4. Multi-Strategy Genius Search
 
-- First request for a video ID: Calls OpenAI (high reasoning), stores in Supabase
-- Subsequent requests: Returns cached result instantly
-- Cost: ~$0.014 per unique video, $0 for cached hits
+For Japanese song titles, uses advanced search strategies:
+
+1. **Direct Search**: Original title (Japanese or mixed)
+2. **Romanized Search**: Convert title to romaji using Kuroshiro
+3. **Artist-Focused Search**: Extract artist + keywords pattern
+4. **Title Similarity**: Compare results against original title
+
+This maximizes Genius hit rate for Japanese music.
+
+### 5. Distributed Locking
+
+Prevents concurrent processing of the same video:
+- Inserts `PROCESSING` marker in cache
+- Other requests wait up to 30 seconds
+- Automatic cleanup on errors
+- Race condition handling via unique constraint

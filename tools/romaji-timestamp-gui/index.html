@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Romaji Timestamp GUI</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-bottom: 30px;
+      color: #333;
+    }
+    .input-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #555;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .button-group {
+      margin: 20px 0;
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: #4CAF50;
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #45a049;
+    }
+    .btn-secondary {
+      background: #2196F3;
+      color: white;
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #0b7dda;
+    }
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-top: 20px;
+    }
+    .panel {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .panel-header {
+      background: #f9f9f9;
+      padding: 12px;
+      border-bottom: 1px solid #ddd;
+      font-weight: 600;
+      color: #555;
+    }
+    .panel-content {
+      padding: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      background: #fafafa;
+    }
+    #logOutput {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .log-line {
+      margin-bottom: 4px;
+    }
+    .log-error {
+      color: #d32f2f;
+    }
+    .log-success {
+      color: #388e3c;
+    }
+    .log-info {
+      color: #1976d2;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 8px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+    th {
+      background: #f5f5f5;
+      font-weight: 600;
+    }
+    .vtt-preview {
+      white-space: pre;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Romaji Timestamp GUI</h1>
+    
+    <div class="input-group">
+      <label for="youtubeUrl">YouTube URL or Video ID:</label>
+      <input type="text" id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=... or dQw4w9WgXcQ">
+    </div>
+    
+    <div class="input-group">
+      <label for="geniusUrl">Genius URL:</label>
+      <input type="text" id="geniusUrl" placeholder="https://genius.com/...">
+    </div>
+    
+    <div class="button-group">
+      <button class="btn-primary" id="fetchAlignBtn">Fetch & Align</button>
+      <button class="btn-secondary" id="pushDbBtn" disabled>Push to DB</button>
+    </div>
+    
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-header">Log Output</div>
+        <div class="panel-content" id="logOutput"></div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-header">Segments Preview</div>
+        <div class="panel-content" id="segmentsPreview">
+          <table id="segmentsTable" style="display:none">
+            <thead>
+              <tr>
+                <th>Start</th>
+                <th>End</th>
+                <th>Text</th>
+              </tr>
+            </thead>
+            <tbody id="segmentsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    
+    <div class="panel" style="margin-top: 20px;">
+      <div class="panel-header">WebVTT Preview</div>
+      <div class="panel-content">
+        <div class="vtt-preview" id="vttPreview"></div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="renderer.js"></script>
+</body>
+</html>
