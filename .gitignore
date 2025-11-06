@@ -4,3 +4,5 @@ server/.env
 .env
 *.log
 .DS_Store
+tools/
+.roo/
