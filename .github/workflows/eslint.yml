@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - '**.js'
-      - '.eslintrc.json'
+      - 'eslint.config.js'
+      - 'package.json'
   pull_request:
     branches: [main]
     paths:
       - '**.js'
-      - '.eslintrc.json'
+      - 'eslint.config.js'
+      - 'package.json'
   workflow_dispatch:
 
 concurrency:
@@ -33,15 +35,14 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+        cache: 'npm'
     
-    - name: Install ESLint
-      run: npm install -g eslint
+    - name: Install dependencies
+      run: npm ci
     
     - name: Lint extension code
-      run: |
-        eslint *.js --max-warnings 10
+      run: npm run lint
     
     - name: Lint server code
       working-directory: ./server
-      run: |
-        eslint *.js --max-warnings 5
+      run: npm ci && npx eslint *.js --max-warnings 5

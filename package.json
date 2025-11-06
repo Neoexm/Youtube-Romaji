@@ -1,0 +1,14 @@
+{
+  "name": "youtube-romaji",
+  "version": "1.0.0",
+  "description": "YouTube Romaji Captions Extension",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint *.js --max-warnings 10"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "globals": "^15.13.0"
+  }
+}

@@ -11,43 +11,6 @@
  * - ZERO page DOM injection, ZERO Workers from content script
  */
 
-let romajiReady = false;
-
-async function bgCall(type, payload, timeoutMs = 60000) {
-  return new Promise((resolve, reject) => {
-    let done = false;
-    const t = setTimeout(() => {
-      if (!done) {
-        done = true;
-        reject(new Error('bg timeout'));
-      }
-    }, timeoutMs);
-    chrome.runtime.sendMessage({ type, ...payload }, (resp) => {
-      if (done) return;
-      done = true;
-      clearTimeout(t);
-      if (chrome.runtime.lastError) {
-        return reject(chrome.runtime.lastError);
-      }
-      if (resp?.success === false) {
-        return reject(new Error(resp.error || 'bg call failed'));
-      }
-      resolve(resp);
-    });
-  });
-}
-
-// Kuromoji removed - now using API for romanization
-
-function scrubCueText(t) {
-  return String(t ?? '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-}
-
 let videoEl = null;
 let videoId = null;
 let overlayEl = null;
@@ -78,7 +41,6 @@ const JAPANESE_LANG_RE = /^ja(-|$)/i;
 // ============================================================================
 
 function $(sel, root = document) { return root.querySelector(sel); }
-function $all(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 (function installTimedtextSniffer() {
@@ -88,13 +50,15 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
   const TIMEDTEXT_RE = /(\/api\/timedtext|[?&]t?imedtext\b)/i;
 
   const _fetch = window.fetch;
-  window.fetch = function(input, init) {
+  window.fetch = function(input) {
     try {
       const url = typeof input === 'string' ? input : input?.url;
       if (url && TIMEDTEXT_RE.test(url)) {
         window.postMessage({ source: 'romaji-bridge', type: 'TIMEDTEXT_URL', url }, '*');
       }
-    } catch {}
+    } catch (e) {
+      console.error('[romaji] fetch wrapper error:', e);
+    }
     return _fetch.apply(this, arguments);
   };
 
@@ -104,7 +68,9 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
       if (url && TIMEDTEXT_RE.test(url)) {
         window.postMessage({ source: 'romaji-bridge', type: 'TIMEDTEXT_URL', url }, '*');
       }
-    } catch {}
+    } catch (e) {
+      console.error('[romaji] XHR wrapper error:', e);
+    }
     return _open.apply(this, arguments);
   };
 })();
@@ -116,7 +82,9 @@ function getCurrentVideoId() {
     if (v) return v;
     const m = location.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
     if (m) return m[1];
-  } catch {}
+  } catch (e) {
+    console.error('[romaji] getCurrentVideoId error:', e);
+  }
   return null;
 }
 
@@ -247,7 +215,9 @@ window.addEventListener('message', (e) => {
           startProactiveRomanization(videoId, tracks);
         }
       }
-    } catch {}
+    } catch (e) {
+      console.error('[romaji] postMessage handler error:', e);
+    }
   }
 }, false);
 
@@ -306,7 +276,7 @@ function setupNavigationListener() {
   mo.observe(document.documentElement, { childList: true, subtree: true });
 }
 
-async function onNavigation(event) {
+async function onNavigation() {
   const newVideoId = getCurrentVideoId();
   if (newVideoId === videoId) return;
   
@@ -524,7 +494,7 @@ function buildMenuItem(label, onClick, entryKey) {
   li.appendChild(name);
   li.appendChild(filler);
   
-  li.addEventListener("click", evt => {
+  li.addEventListener("click", () => {
     if (!isRomajiActive) {
       onClick();
     }
@@ -620,17 +590,6 @@ async function ensureSniffedTimedtextUrl() {
 // ============================================================================
 // CAPTION SELECTION & FETCHING
 // ============================================================================
-
-function turnOffRomaji() {
-  console.log('[romaji] turning off romaji captions');
-  if (renderer) renderer.stop();
-  renderer = null;
-  ensureOverlay(false);
-  setNativeCaptionsVisible(true);
-  isRomajiActive = false;
-  stopSubtitleDisplayWatcher();
-  updateMenuCheckmarks();
-}
 
 async function onSelectRomaji() {
   console.log("[romaji] onSelectRomaji triggered");
@@ -1072,22 +1031,6 @@ async function romanizeCues(cues) {
   }
 }
 
-function splitJapaneseBlocks(s) {
-  const out = [];
-  let cur = "";
-  for (const ch of s) {
-    if (/^[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}ー]$/u.test(ch)) {
-      cur += ch;
-    } else {
-      if (cur) out.push(cur);
-      cur = "";
-      out.push(ch);
-    }
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
 // ============================================================================
 // OVERLAY RENDERING
 // ============================================================================
@@ -1221,23 +1164,6 @@ function updateCaptionButton() {
   }, 100);
 }
 
-function closeSettingsMenu() {
-  const settingsBtn = document.querySelector('.ytp-settings-button');
-  if (settingsBtn) {
-    settingsBtn.click();
-  }
-}
-
-function backToSettingsPanel() {
-  const backBtn = document.querySelector('.ytp-panel-back-button');
-  if (backBtn) {
-    console.log('[romaji] clicking back button to return to settings');
-    backBtn.click();
-  } else {
-    console.warn('[romaji] back button not found, menu may have closed');
-  }
-}
-
 class CaptionRenderer {
   constructor(video, host, cues) {
     this.video = video;
@@ -1307,10 +1233,4 @@ async function listCustomTracks() {
 }
 
 function storageGet(key) { return chrome.storage.local.get([key]).then(v => v[key]); }
-function storageSet(obj) { return chrome.storage.local.set(obj); }
 
-function hash(s) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h) + s.charCodeAt(i) | 0;
-  return String(h >>> 0);
-}

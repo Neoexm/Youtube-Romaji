@@ -20,7 +20,7 @@ async function init() {
     const vParam = url.searchParams.get("v");
     const shorts = url.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
     videoId = vParam || (shorts ? shorts[1] : null);
-  } catch (err) {
+  } catch {
     videoId = null;
   }
 

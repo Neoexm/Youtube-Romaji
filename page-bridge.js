@@ -42,7 +42,9 @@
         url,
         isASR 
       }, '*');
-    } catch {}
+    } catch (e) {
+      console.error('[romaji-bridge] emit error:', e);
+    }
   };
 
   // Hook fetch
@@ -54,7 +56,9 @@
       if (typeof url === 'string' && url.includes('/api/timedtext')) {
         emit(String(url));
       }
-    } catch {}
+    } catch (e) {
+      console.error('[romaji-bridge] fetch hook error:', e);
+    }
     return _fetch.apply(this, args);
   };
 
@@ -65,7 +69,9 @@
       if (typeof url === 'string' && url.includes('/api/timedtext')) {
         emit(url);
       }
-    } catch {}
+    } catch (e) {
+      console.error('[romaji-bridge] XHR hook error:', e);
+    }
     return _open.call(this, method, url, ...rest);
   };
 
@@ -106,7 +112,9 @@
       try {
         const pr4 = typeof args.player_response === 'string' ? JSON.parse(args.player_response) : args.player_response;
         if (pr4?.videoDetails) return pr4;
-      } catch {}
+      } catch (e) {
+        console.error('[romaji-bridge] player_response parse error:', e);
+      }
     }
     if (args?.raw_player_response?.videoDetails) return args.raw_player_response;
 
@@ -121,7 +129,10 @@
     try {
       const u = new URL(location.href);
       return u.searchParams.get('v') || location.pathname.split('/').filter(Boolean).pop() || null;
-    } catch { return null; }
+    } catch (e) {
+      console.error('[romaji-bridge] getVideoId error:', e);
+      return null;
+    }
   }
 
   function pushState(tag = 'tick') {
