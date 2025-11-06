@@ -529,6 +529,7 @@ function isJapaneseText(text) {
   return japaneseRatio > 0.3; // At least 30% Japanese characters
 }
 
+// eslint-disable-next-line no-unused-vars
 async function alignLyricsToSubtitles(geniusLyrics, subtitleLines) {
   console.log(`[align] aligning ${subtitleLines.length} subtitle lines`);
   console.log(`[align] first 3 subtitle lines:`, subtitleLines.slice(0, 3));
@@ -596,7 +597,7 @@ async function alignLyricsToSubtitles(geniusLyrics, subtitleLines) {
       if (i < 3) {
         console.log(`[align]   ${i + 1}. "${subLine}" → "${romanized}"`);
       }
-    } catch (error) {
+    } catch {
       console.error(`[align] ✗ failed to romanize: "${subLine.substring(0, 30)}..."`);
       romanizedSubtitles.push('');
     }
@@ -692,7 +693,6 @@ async function alignLyricsToSubtitles(geniusLyrics, subtitleLines) {
           console.log(`[align] line ${i + 1}: next line is continuation, allowing full combination`);
         } else {
           // Check if the next subtitle would match well with any of the lines we're about to consume
-          let shouldReduceCombination = false;
           
           for (let j = 1; j < bestCombination.numLines; j++) {
             const potentialNextLine = normalizeText(bestCombination.lines[j]);
@@ -709,7 +709,6 @@ async function alignLyricsToSubtitles(geniusLyrics, subtitleLines) {
             // This ensures we only block when next subtitle needs the WHOLE line, not just part of it
             if (nextMatchScore > 0.75 && reverseMatchScore > 0.80) {
               console.log(`[align] anti-greedy: next subtitle fully needs line ${j} (match: ${(nextMatchScore * 100).toFixed(1)}%, coverage: ${(reverseMatchScore * 100).toFixed(1)}%), reducing combination`);
-              shouldReduceCombination = true;
               
               // Reduce to only first j lines
               bestCombination = {
@@ -843,7 +842,6 @@ function alignByPosition(geniusLyrics, subtitleLines) {
     console.log(`[align] Genius > Subs: condensing ${lyricsLines.length} genius lines to ${subtitleLines.length} subs`);
     
     const linesPerSub = ratio;
-    let geniusIdx = 0;
     
     for (let i = 0; i < subtitleLines.length; i++) {
       const startIdx = Math.floor(i * linesPerSub);
@@ -1104,7 +1102,7 @@ app.post('/romaji/upsertTimed', async (req, res) => {
     
     const romanizedText = segments.map(s => s.text).join('\n');
     
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('romanized_cache')
       .upsert({
         video_id: videoId,
