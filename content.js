@@ -651,6 +651,31 @@ async function onSelectRomaji() {
       return;
     }
     
+    // CRITICAL: Validate that we actually have Japanese content
+    // Fetch a sample to ensure we didn't grab English subs mislabeled as Japanese
+    const sampleValidation = await fetchCaptionsUsingSniff();
+    if (!sampleValidation.ok) {
+      throw new Error('Failed to fetch sample subtitles for validation');
+    }
+    
+    const sampleCues = parseTimedTextAuto(sampleValidation.tag, sampleValidation.body);
+    if (sampleCues.length === 0) {
+      throw new Error('No subtitle content found');
+    }
+    
+    // Check first few lines for Japanese characters
+    const sampleText = sampleCues.slice(0, 5).map(c => c.text).join(' ');
+    const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(sampleText);
+    
+    if (!hasJapanese) {
+      console.error("[romaji] subtitle validation FAILED - no Japanese characters detected");
+      console.error("[romaji] sample text:", sampleText.substring(0, 100));
+      alert('The selected subtitles do not contain Japanese text. Please ensure Japanese subtitles are available.');
+      return;
+    }
+    
+    console.log(`[romaji] subtitle validation PASSED - Japanese content confirmed`);
+    
     const trackName = (track.name && track.name.simpleText) || track.languageCode || 'Unknown';
     console.log(`[romaji] selected manual track: ${trackName}`);
     

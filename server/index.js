@@ -940,16 +940,13 @@ app.post('/romanize', async (req, res) => {
     // Check cache first
     const { data: cached, error: cacheError } = await supabase
       .from('romanized_cache')
-      .select('romanized_text, vtt, segments, timed')
+      .select('romanized_text, source')
       .eq('video_id', videoId)
       .single();
 
     if (cached && !cacheError) {
       console.log(`[romanize] cache HIT for ${sanitizedVideoId}`);
-      const response = { romanized: cached.romanized_text, cached: true };
-      if (cached.vtt) response.vtt = cached.vtt;
-      if (cached.segments) response.segments = cached.segments;
-      if (cached.timed) response.timed = cached.timed;
+      const response = { romanized: cached.romanized_text, cached: true, source: cached.source };
       return res.json(response);
     }
 
@@ -1042,15 +1039,25 @@ app.post('/romanize', async (req, res) => {
       const sanitizedSource = (source || '').replace(/\n|\r/g, '');
       console.log(`[romanize] ✓✓✓ Romanization complete (source: ${sanitizedSource})`);
       
-      // Update cache with result
-      await supabase
+      // Update cache with result - CRITICAL: verify update succeeded
+      const { data: updateResult, error: updateError } = await supabase
         .from('romanized_cache')
         .update({
           romanized_text: romanized,
-          source: source,
-          genius_reference: geniusLyrics ? 'available' : 'unavailable'
+          source: source
         })
-        .eq('video_id', videoId);
+        .eq('video_id', videoId)
+        .select();
+
+      if (updateError) {
+        console.error(`[romanize] ✗ cache update FAILED for ${sanitizedVideoId}:`, updateError);
+        throw new Error(`Failed to update cache: ${updateError.message}`);
+      }
+      
+      if (!updateResult || updateResult.length === 0) {
+        console.error(`[romanize] ✗ cache update returned no rows for ${sanitizedVideoId}`);
+        throw new Error('Cache update did not affect any rows');
+      }
 
       console.log(`[romanize] ✓ cached result for ${sanitizedVideoId} (source: ${sanitizedSource})`);
 
@@ -1112,14 +1119,8 @@ app.post('/romaji/upsertTimed', async (req, res) => {
       .upsert({
         video_id: videoId,
         romanized_text: romanizedText,
-        vtt: vtt,
-        segments: segments,
-        timed: true,
         source: source || 'gui-tool',
-        genius_url: geniusUrl,
-        text_hash: textHash,
-        tool_version: toolVersion,
-        updated_at: new Date().toISOString()
+        genius_url: geniusUrl || null
       }, {
         onConflict: 'video_id'
       })
