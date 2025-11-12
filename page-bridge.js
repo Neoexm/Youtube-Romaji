@@ -121,8 +121,21 @@
     return null;
   }
 
+  // Extract full caption track objects following yt-dlp methodology (lines 4015-4016)
+  // Include: baseUrl, languageCode, kind (asr vs manual), name, isTranslatable
   function getCaptionTracks(pr) {
-    return pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    
+    // Return full track objects with all yt-dlp-relevant fields
+    // No filtering or transformation - let content script handle selection
+    return tracks.map(track => ({
+      baseUrl: track.baseUrl || null,
+      languageCode: track.languageCode || null,
+      kind: track.kind || null,  // 'asr' for auto-generated, null/undefined for manual
+      name: track.name || null,  // Contains simpleText with display name
+      isTranslatable: track.isTranslatable || false,
+      vssId: track.vssId || null  // Internal YouTube track ID
+    }));
   }
 
   function getVideoId() {

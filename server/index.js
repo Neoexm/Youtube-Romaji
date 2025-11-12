@@ -70,6 +70,13 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Romaji API Server running' });
 });
 
+// Cache versioning: bump this when prompt/templates change to invalidate cache cleanly
+const PROMPT_VERSION = 'pmpt_6903b00f45ec81909db49935f61cabc8050221356ced0cef@v3';
+function buildCacheKey(videoId) {
+  const id = String(videoId || '').replace(/\n|\r/g, '');
+  return `${id}#${PROMPT_VERSION}`;
+}
+
 // ============================================================================
 // YOUTUBE METADATA EXTRACTION
 // ============================================================================
@@ -937,26 +944,29 @@ app.post('/romanize', async (req, res) => {
     const sanitizedVideoId = String(videoId).replace(/\n|\r/g, '');
     console.log(`[romanize] videoId: ${sanitizedVideoId}, text length: ${text.length}`);
 
-    // Check cache first
-    const { data: cached, error: cacheError } = await supabase
+    // Check cache (versioned key first, then legacy plain key for backward compatibility)
+    const cacheKey = buildCacheKey(videoId);
+    const { data: cachedRows, error: cacheError } = await supabase
       .from('romanized_cache')
-      .select('romanized_text, source')
-      .eq('video_id', videoId)
-      .single();
+      .select('video_id, romanized_text, source')
+      .in('video_id', [cacheKey, videoId]);
 
-    if (cached && !cacheError) {
-      console.log(`[romanize] cache HIT for ${sanitizedVideoId}`);
-      const response = { romanized: cached.romanized_text, cached: true, source: cached.source };
-      return res.json(response);
+    if (!cacheError && Array.isArray(cachedRows) && cachedRows.length > 0) {
+      // Prefer versioned key
+      const preferred = cachedRows.find(r => r.video_id === cacheKey) || cachedRows[0];
+      if (preferred.romanized_text && preferred.romanized_text !== 'PROCESSING') {
+        console.log(`[romanize] cache HIT for ${sanitizedVideoId} (key=${preferred.video_id === cacheKey ? 'versioned' : 'legacy'})`);
+        return res.json({ romanized: preferred.romanized_text, cached: true, source: preferred.source });
+      }
     }
 
-    console.log(`[romanize] cache MISS for ${sanitizedVideoId}, attempting to acquire lock...`);
+    console.log(`[romanize] cache MISS for ${sanitizedVideoId} (key=${cacheKey}), attempting to acquire lock...`);
 
     // Acquire distributed lock
     const { error: lockError } = await supabase
       .from('romanized_cache')
       .insert([{
-        video_id: videoId,
+        video_id: cacheKey,
         romanized_text: 'PROCESSING',
         created_at: new Date().toISOString()
       }])
@@ -973,7 +983,7 @@ app.post('/romanize', async (req, res) => {
           const { data: retryCheck } = await supabase
             .from('romanized_cache')
             .select('romanized_text')
-            .eq('video_id', videoId)
+            .eq('video_id', cacheKey)
             .single();
           
           if (retryCheck && retryCheck.romanized_text !== 'PROCESSING') {
@@ -1046,7 +1056,7 @@ app.post('/romanize', async (req, res) => {
           romanized_text: romanized,
           source: source
         })
-        .eq('video_id', videoId)
+        .eq('video_id', cacheKey)
         .select();
 
       if (updateError) {
@@ -1071,7 +1081,7 @@ app.post('/romanize', async (req, res) => {
       await supabase
         .from('romanized_cache')
         .delete()
-        .eq('video_id', videoId);
+        .eq('video_id', cacheKey);
       
       throw processingError;
     }

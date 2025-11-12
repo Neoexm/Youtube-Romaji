@@ -31,6 +31,7 @@ let captionMenuObserver = null;
 
 let activeRomanization = null;
 let tracksLoggedThisNav = false;
+let asrModeActive = false;
 
 const SELECTOR_PLAYER = "ytd-player";
 const CAPTION_PANEL_TITLE_RE = /Subtitles|Captions|字幕|자막/i;
@@ -43,37 +44,104 @@ const JAPANESE_LANG_RE = /^ja(-|$)/i;
 function $(sel, root = document) { return root.querySelector(sel); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-(function installTimedtextSniffer() {
-  if (window.__romajiSnifferInstalled) return;
-  window.__romajiSnifferInstalled = true;
+let toastHolder = null;
+function ensureToastHolder() {
+  if (toastHolder) return toastHolder;
+  toastHolder = document.createElement('div');
+  toastHolder.id = 'romaji-toast-holder';
+  toastHolder.style.position = 'absolute';
+  toastHolder.style.top = '12px';
+  toastHolder.style.right = '20px';
+  toastHolder.style.zIndex = '9999';
+  toastHolder.style.display = 'flex';
+  toastHolder.style.flexDirection = 'column';
+  toastHolder.style.gap = '8px';
+  toastHolder.style.pointerEvents = 'none';
+  (document.querySelector('.html5-video-player') || document.body).appendChild(toastHolder);
+  return toastHolder;
+}
+function showToast(msg, type = 'info', ttl = 4000) {
+  try {
+    const h = ensureToastHolder();
+    const el = document.createElement('div');
+    el.textContent = msg;
+    el.style.background = type === 'error' ? 'rgba(180,0,0,0.85)' : 'rgba(30,30,30,0.85)';
+    el.style.color = '#fff';
+    el.style.padding = '6px 10px';
+    el.style.fontSize = '12px';
+    el.style.borderRadius = '4px';
+    el.style.boxShadow = '0 2px 6px rgba(0,0,0,0.4)';
+    el.style.pointerEvents = 'auto';
+    el.style.fontFamily = 'Roboto, sans-serif';
+    h.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .25s'; }, ttl - 250);
+    setTimeout(() => el.remove(), ttl);
+  } catch (e) {
+    console.error('[romaji] toast failed', e);
+  }
+}
 
-  const TIMEDTEXT_RE = /(\/api\/timedtext|[?&]t?imedtext\b)/i;
+let progressOverlay = null;
+function showProgressOverlay(message = 'Romanizing subtitles...') {
+  hideProgressOverlay();
+  
+  const playerContainer = document.querySelector('.html5-video-player');
+  if (!playerContainer) {
+    console.warn('[romaji] no player container for progress overlay');
+    return null;
+  }
+  
+  progressOverlay = document.createElement('div');
+  progressOverlay.id = 'romaji-progress-overlay';
+  progressOverlay.style.position = 'fixed';
+  progressOverlay.style.top = '20px';
+  progressOverlay.style.right = '20px';
+  progressOverlay.style.zIndex = '10000';
+  
+  const textEl = document.createElement('div');
+  textEl.id = 'romaji-progress-text';
+  textEl.textContent = message;
+  
+  const barContainer = document.createElement('div');
+  barContainer.id = 'romaji-progress-bar-container';
+  
+  const bar = document.createElement('div');
+  bar.id = 'romaji-progress-bar';
+  barContainer.appendChild(bar);
+  
+  const percentageEl = document.createElement('div');
+  percentageEl.id = 'romaji-progress-percentage';
+  percentageEl.textContent = '0%';
+  
+  progressOverlay.appendChild(textEl);
+  progressOverlay.appendChild(barContainer);
+  progressOverlay.appendChild(percentageEl);
+  
+  document.body.appendChild(progressOverlay);
+  
+  console.log('[romaji] progress overlay shown');
+  
+  return progressOverlay;
+}
 
-  const _fetch = window.fetch;
-  window.fetch = function(input) {
-    try {
-      const url = typeof input === 'string' ? input : input?.url;
-      if (url && TIMEDTEXT_RE.test(url)) {
-        window.postMessage({ source: 'romaji-bridge', type: 'TIMEDTEXT_URL', url }, '*');
-      }
-    } catch (e) {
-      console.error('[romaji] fetch wrapper error:', e);
-    }
-    return _fetch.apply(this, arguments);
-  };
+function updateProgressOverlay(percentage) {
+  if (!progressOverlay) return;
+  
+  const bar = progressOverlay.querySelector('#romaji-progress-bar');
+  const percentageEl = progressOverlay.querySelector('#romaji-progress-percentage');
+  
+  if (bar) bar.style.width = `${Math.min(100, Math.max(0, percentage))}%`;
+  if (percentageEl) percentageEl.textContent = `${Math.round(percentage)}%`;
+}
 
-  const _open = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    try {
-      if (url && TIMEDTEXT_RE.test(url)) {
-        window.postMessage({ source: 'romaji-bridge', type: 'TIMEDTEXT_URL', url }, '*');
-      }
-    } catch (e) {
-      console.error('[romaji] XHR wrapper error:', e);
-    }
-    return _open.apply(this, arguments);
-  };
-})();
+function hideProgressOverlay() {
+  if (progressOverlay) {
+    progressOverlay.remove();
+    progressOverlay = null;
+  }
+}
+
+// Timedtext sniffing is handled by page-bridge.js in page world
 
 function getCurrentVideoId() {
   try {
@@ -89,17 +157,70 @@ function getCurrentVideoId() {
 }
 
 // Helper to modify only the fmt parameter
-function withFmt(urlStr, fmt) {
+// Build timedtext URL following yt-dlp's methodology (lines 3989-3996)
+// CRITICAL: Never modify signature/expire/sparams/pot/potc/c parameters
+function buildTimedTextUrl(baseUrl, options = {}) {
   try {
-    const u = new URL(urlStr);
-    if (fmt == null) {
-      u.searchParams.delete('fmt');
-    } else {
-      u.searchParams.set('fmt', fmt);
+    const url = new URL(baseUrl);
+    
+    // Add format parameter if specified (yt-dlp line 3989)
+    if (options.fmt) {
+      url.searchParams.set('fmt', options.fmt);
     }
-    return u.toString();
+    
+    // Set xosf to empty to avoid undesirable text position data (yt-dlp line 3990)
+    // This prevents YouTube from returning position/alignment data we don't need
+    url.searchParams.set('xosf', '');
+    
+    // For auto-translation, add tlang parameter (yt-dlp line 4086)
+    if (options.tlang) {
+      url.searchParams.set('tlang', options.tlang);
+    }
+    
+    // NEVER touch these parameters - they come signed from baseUrl:
+    // - signature/sig: Required for authentication
+    // - expire: URL expiration timestamp
+    // - sparams: Signed parameters list
+    // - pot: PO (Proof of Origin) token
+    // - potc: PO token context flag
+    // - c: Client name
+    // - ei: Event ID
+    
+    return url.toString();
+  } catch (e) {
+    console.error('[romaji] buildTimedTextUrl error:', e);
+    return baseUrl;
+  }
+}
+
+// Legacy compatibility wrapper - prefer buildTimedTextUrl() for new code
+function withFmt(urlStr, fmt) {
+  return buildTimedTextUrl(urlStr, { fmt });
+}
+
+// PO Token detection helpers (based on yt-dlp lines 4036-4053)
+// NOTE: These are for informational/debugging purposes only
+// yt-dlp philosophy: Don't check upfront, just try everything and handle errors after
+function requiresPoToken(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    const exp = url.searchParams.get('exp');
+    if (!exp) return false;
+    
+    const experiments = exp.split(',');
+    // yt-dlp detects PO token requirement via 'xpe' or 'xpv' experiments
+    return experiments.includes('xpe') || experiments.includes('xpv');
   } catch {
-    return urlStr;
+    return false;
+  }
+}
+
+function hasPoToken(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    return url.searchParams.has('pot');
+  } catch {
+    return false;
   }
 }
 
@@ -117,9 +238,14 @@ async function fetchRaw(url) {
     const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
     const text = await res.text();
     const ok = res.ok && text.trim().length > 0;
-    return { ok, text, ct: res.headers.get('content-type') || '' };
+    return { 
+      ok, 
+      text, 
+      ct: res.headers.get('content-type') || '',
+      status: res.status
+    };
   } catch (err) {
-    return { ok: false, text: '', ct: '', error: err.message };
+    return { ok: false, text: '', ct: '', status: 0, error: err.message };
   }
 }
 
@@ -130,23 +256,30 @@ async function fetchRaw(url) {
 const romanizationCache = new Map(); // videoId -> { status: 'pending'|'ready'|'error', cues: [...] }
 
 async function startProactiveRomanization(videoId, tracks) {
-  const japaneseTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+  const manualTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+  const asrTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
+  const chosen = manualTrack || asrTrack;
+  if (!chosen) { console.log('[romaji] no JA track for proactive romanization'); return; }
   
-  if (!japaneseTrack) {
-    console.log('[romaji] no manual Japanese track for proactive romanization');
+  // yt-dlp methodology: use baseUrl directly from track
+  if (!chosen.baseUrl) {
+    console.warn('[romaji] chosen track missing baseUrl, cannot start proactive romanization');
     return;
   }
+  
+  const isAsr = chosen.kind === 'asr';
   
   if (romanizationCache.has(videoId)) {
     console.log('[romaji] already romanizing or romanized:', videoId);
     return;
   }
   
-  console.log('[romaji] starting proactive romanization for:', videoId);
+  console.log('[romaji] starting proactive romanization for:', videoId, 'track:', chosen.languageCode, isAsr ? 'ASR' : 'manual');
   romanizationCache.set(videoId, { status: 'pending', cues: null });
   
   try {
-    const fetchResult = await fetchCaptionsUsingSniff();
+    // Use yt-dlp strategy directly with track baseUrl
+    const fetchResult = await fetchCaptionsWithFallback(chosen.baseUrl, isAsr);
     if (!fetchResult.ok) {
       throw new Error(fetchResult.error);
     }
@@ -156,7 +289,7 @@ async function startProactiveRomanization(videoId, tracks) {
       throw new Error('No cues parsed');
     }
     
-    const romanizedCues = await romanizeCues(cues);
+    const romanizedCues = await romanizeCues(cues, false);
     romanizationCache.set(videoId, { status: 'ready', cues: romanizedCues });
     console.log('[romaji] proactive romanization complete:', videoId);
   } catch (err) {
@@ -197,7 +330,23 @@ window.addEventListener('message', (e) => {
   }
   
   if (d.type === 'TIMEDTEXT_URL') {
-    lastVideoIdForTimedtext = getCurrentVideoId();
+    const currentVid = getCurrentVideoId();
+    if (!currentVid) return;
+    
+    try {
+      const urlObj = new URL(d.url);
+      const urlVideoId = urlObj.searchParams.get('v');
+      
+      if (urlVideoId !== currentVid) {
+        console.warn('[romaji] ignoring timedtext URL for wrong video:', urlVideoId, 'current:', currentVid);
+        return;
+      }
+    } catch (e) {
+      console.error('[romaji] failed to validate timedtext URL:', e);
+      return;
+    }
+    
+    lastVideoIdForTimedtext = currentVid;
     
     if (d.isASR) {
       lastTimedtextUrlASR = d.url;
@@ -209,10 +358,9 @@ window.addEventListener('message', (e) => {
     
     try {
       if (lastTimedtextUrl || lastTimedtextUrlASR) {
-        const videoId = getCurrentVideoId();
-        const tracks = latestTracksByVideo.get(videoId);
+        const tracks = latestTracksByVideo.get(currentVid);
         if (tracks && tracks.length > 0) {
-          startProactiveRomanization(videoId, tracks);
+          startProactiveRomanization(currentVid, tracks);
         }
       }
     } catch (e) {
@@ -285,6 +433,10 @@ async function onNavigation() {
   
   tracksLoggedThisNav = false;
   
+  lastTimedtextUrl = null;
+  lastTimedtextUrlASR = null;
+  lastVideoIdForTimedtext = null;
+  
   if (renderer) renderer.stop();
   renderer = null;
   ensureOverlay(false);
@@ -330,12 +482,12 @@ function tryWireCaptionMenu() {
     settingsBtn.addEventListener('click', () => {
       setTimeout(() => {
         const tracks = getCachedTracks();
-        const hasJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || ""));
-        
-        if (hasJa) {
+        const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
+        const hasAsrJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind === 'asr');
+        if (hasManualJa || hasAsrJa) {
           updateSubtitleCount();
           if (isRomajiActive) {
-            updateSubtitleDisplay('Romaji');
+            updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
             startSubtitleDisplayWatcher();
           }
         }
@@ -354,12 +506,12 @@ function tryWireCaptionMenu() {
           } else if (title && title.textContent === 'Settings') {
             setTimeout(() => {
               const tracks = getCachedTracks();
-              const hasJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || ""));
-              
-              if (hasJa) {
+              const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
+              const hasAsrJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind === 'asr');
+              if (hasManualJa || hasAsrJa) {
                 updateSubtitleCount();
                 if (isRomajiActive) {
-                  updateSubtitleDisplay('Romaji');
+                  updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
                   startSubtitleDisplayWatcher();
                 }
               }
@@ -390,8 +542,9 @@ function startSubtitleDisplayWatcher() {
   if (!contentEl) return;
   
   subtitleDisplayObserver = new MutationObserver(() => {
-    if (isRomajiActive && contentEl.textContent !== 'Romaji') {
-      contentEl.textContent = 'Romaji';
+    if (isRomajiActive) {
+      const label = asrModeActive ? 'Romaji (auto)' : 'Romaji';
+      if (contentEl.textContent !== label) contentEl.textContent = label;
     }
   });
   
@@ -422,13 +575,10 @@ async function injectCaptionEntries(menuEl) {
   const frag = document.createDocumentFragment();
   const tracks = getCachedTracks();
   console.log('[romaji] cached tracks:', tracks.length, tracks);
-  const hasJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || ""));
-  console.log('[romaji] has Japanese track:', hasJa);
-  
-  if (hasJa) {
-    console.log('[romaji] adding Romaji menu item');
-    frag.appendChild(buildMenuItem("Romaji", onSelectRomaji, "romaji:auto"));
-  }
+  const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
+  const hasAsrJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind === 'asr');
+  if (hasManualJa) frag.appendChild(buildMenuItem("Romaji", onSelectRomaji, "romaji:auto"));
+  else if (hasAsrJa) frag.appendChild(buildMenuItem("Romaji (auto)", onSelectRomaji, "romaji:auto"));
   
   const customTracks = await listCustomTracks();
   for (const track of customTracks) {
@@ -447,9 +597,7 @@ async function injectCaptionEntries(menuEl) {
   
   updateMenuCheckmarks();
   
-  if (isRomajiActive) {
-    setTimeout(() => updateSubtitleDisplay('Romaji'), 0);
-  }
+  if (isRomajiActive) setTimeout(() => updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji'), 0);
   
   menuEl.querySelectorAll('.ytp-menuitem[role="menuitemradio"]').forEach(item => {
     if (!item.hasAttribute('data-romaji-entry')) {
@@ -507,7 +655,7 @@ function buildMenuItem(label, onClick, entryKey) {
         setTimeout(() => {
           updateSubtitleCount();
           if (isRomajiActive) {
-            updateSubtitleDisplay('Romaji');
+            updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
             startSubtitleDisplayWatcher();
           }
         }, 50);
@@ -531,7 +679,7 @@ function buildMenuItem(label, onClick, entryKey) {
           setTimeout(() => {
             updateSubtitleCount();
             if (isRomajiActive) {
-              updateSubtitleDisplay('Romaji');
+              updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
               startSubtitleDisplayWatcher();
             }
           }, 50);
@@ -545,46 +693,78 @@ function buildMenuItem(label, onClick, entryKey) {
 }
 
 // ============================================================================
-// TIMEDTEXT URL SNIFFER & CC TOGGLE
+// TIMEDTEXT URL SNIFFER & CC TOGGLE (DEPRECATED)
 // ============================================================================
 
-// Ensure we have a sniffed timedtext URL by toggling CC if needed
+// DEPRECATED: This approach is unreliable due to race conditions and CC button dependency
+// Now using yt-dlp methodology: extract baseUrl from playerResponse.captions.captionTracks
+// Keeping this code for potential fallback scenarios only
 async function ensureSniffedTimedtextUrl() {
-  const currentVid = getCurrentVideoId();
+  console.warn('[romaji] ensureSniffedTimedtextUrl is DEPRECATED - use track.baseUrl instead');
   
-  // Prefer manual URL, fallback to ASR if manual not available
+  const currentVid = getCurrentVideoId();
+  if (!currentVid) {
+    console.warn('[romaji] no current video ID');
+    return false;
+  }
+  
+  if (lastVideoIdForTimedtext !== currentVid) {
+    console.log('[romaji] clearing stale timedtext URLs (video changed)');
+    lastTimedtextUrl = null;
+    lastTimedtextUrlASR = null;
+    lastVideoIdForTimedtext = null;
+  }
+  
   if (lastTimedtextUrl && lastVideoIdForTimedtext === currentVid) {
+    console.log('[romaji] using cached manual timedtext URL');
     return true;
   }
   
   if (lastTimedtextUrlASR && lastVideoIdForTimedtext === currentVid) {
-    console.log('[romaji] using ASR URL as fallback (no manual URL captured)');
+    console.log('[romaji] using cached ASR timedtext URL as fallback');
     lastTimedtextUrl = lastTimedtextUrlASR;
     return true;
   }
   
-  // Try to enable CC to trigger a timedtext request
+  console.log('[romaji] attempting to capture timedtext URL via CC button toggle (FALLBACK MODE)');
+  
   const ccBtn = document.querySelector('.ytp-subtitles-button');
   if (!ccBtn) {
-    console.warn('[romaji] CC button not found');
+    console.warn('[romaji] CC button not found, cannot trigger timedtext request');
     return false;
   }
   
   const wasActive = ccBtn.classList.contains('ytp-subtitles-button-active');
   
-  // Click CC button to turn on captions (triggers timedtext request)
   if (!wasActive) {
+    console.log('[romaji] clicking CC button to trigger timedtext request');
     ccBtn.click();
-  }
-  
-  // Wait up to 2 seconds for the sniffer to capture the URL
-  const start = performance.now();
-  while (!lastTimedtextUrl && performance.now() - start < 2000) {
     await sleep(100);
   }
   
-  // Leave CC on to keep requests flowing
-  return !!lastTimedtextUrl;
+  const start = performance.now();
+  let attempts = 0;
+  while (!lastTimedtextUrl && performance.now() - start < 3000) {
+    await sleep(200);
+    attempts++;
+    
+    if (getCurrentVideoId() !== currentVid) {
+      console.warn('[romaji] video changed during CC toggle, aborting');
+      return false;
+    }
+    
+    if (attempts % 5 === 0) {
+      console.log('[romaji] still waiting for timedtext URL... (' + Math.round((performance.now() - start) / 1000) + 's)');
+    }
+  }
+  
+  if (lastTimedtextUrl) {
+    console.log('[romaji] successfully captured timedtext URL');
+    return true;
+  }
+  
+  console.warn('[romaji] failed to capture timedtext URL after 3 seconds');
+  return false;
 }
 
 // ============================================================================
@@ -593,9 +773,7 @@ async function ensureSniffedTimedtextUrl() {
 
 async function onSelectRomaji() {
   console.log("[romaji] onSelectRomaji triggered");
-  
   if (isRomajiActive) {
-    console.log("[romaji] toggling off romaji");
     if (renderer) renderer.stop();
     renderer = null;
     ensureOverlay(false);
@@ -607,182 +785,318 @@ async function onSelectRomaji() {
     updateCaptionButton();
     return;
   }
-  
-  if (activeRomanization) {
-    console.log("[romaji] romanization already in progress, ignoring");
-    return;
-  }
-  
+  if (activeRomanization) return;
   activeRomanization = (async () => {
     try {
-    let tracks = getCachedTracks();
-    
-    // If no tracks from bridge, try youtubei fallback
-    if (!tracks || tracks.length === 0) {
-      console.log("[romaji] no tracks from bridge, trying youtubei fallback");
-      const vid = getCurrentVideoId();
-      if (!vid) {
-        console.log("[romaji] no videoId available");
+      let tracks = getCachedTracks();
+      if (!tracks || tracks.length === 0) {
+        const vid = getCurrentVideoId();
+        if (!vid) return;
+        const result = await fetchPlayerResponseFallback(vid);
+        if (result.ok && result.data) {
+          const captionData = result.data.captions?.playerCaptionsTracklistRenderer;
+          if (captionData?.captionTracks) {
+            tracks = captionData.captionTracks;
+            latestTracksByVideo.set(vid, tracks);
+          }
+        }
+      }
+      if (!tracks || tracks.length === 0) return;
+      let track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+      let isAsr = false;
+      if (!track) {
+        track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
+        if (track) { isAsr = true; asrModeActive = true; }
+      } else {
+        asrModeActive = false;
+      }
+      if (!track) { 
+        showToast('No Japanese subtitles available', 'error'); 
+        return; 
+      }
+      
+      // yt-dlp methodology: use baseUrl directly from track (no CC button toggling)
+      if (!track.baseUrl) {
+        console.error('[romaji] track missing baseUrl:', track);
+        showToast('Subtitle URL not available', 'error');
         return;
       }
       
-      const result = await fetchPlayerResponseFallback(vid);
-      if (result.ok && result.data) {
-        const captionData = result.data.captions?.playerCaptionsTracklistRenderer;
-        if (captionData?.captionTracks) {
-          tracks = captionData.captionTracks;
-          latestTracksByVideo.set(vid, tracks);
-          console.log("[romaji] youtubei fallback provided tracks:", tracks.length);
+      console.log('[romaji] fetching captions for validation using track baseUrl');
+      console.log('[romaji] track details - languageCode:', track.languageCode, 'kind:', track.kind || 'manual', 'baseUrl length:', track.baseUrl.length);
+      
+      // Fetch using yt-dlp's proven format fallback strategy
+      const sampleValidation = await fetchCaptionsWithFallback(track.baseUrl, isAsr);
+      if (!sampleValidation.ok) {
+        console.error('[romaji] validation fetch failed:', sampleValidation.error);
+        
+        // Better error messaging based on failure type (yt-dlp approach)
+        if (sampleValidation.needsPoToken) {
+          throw new Error(
+            'Unable to access subtitles. This video may require additional authentication. ' +
+            'Try refreshing the page while logged into YouTube, or check if the video is geo-restricted.'
+          );
         }
+        
+        throw new Error('Failed to fetch subtitles: ' + (sampleValidation.error || 'Unknown error'));
       }
-    }
-    
-    if (!tracks || tracks.length === 0) {
-      console.log("[romaji] no tracks available");
-      return;
-    }
-    
-    // Find Japanese track - MANUAL ONLY (no auto-generated)
-    let track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-    
-    if (!track) {
-      console.log("[romaji] no manual Japanese track found");
-      alert('No manual Japanese subtitles found. Auto-generated subtitles are not supported.');
-      return;
-    }
-    
-    // CRITICAL: Validate that we actually have Japanese content
-    // Fetch a sample to ensure we didn't grab English subs mislabeled as Japanese
-    const sampleValidation = await fetchCaptionsUsingSniff();
-    if (!sampleValidation.ok) {
-      throw new Error('Failed to fetch sample subtitles for validation');
-    }
-    
-    const sampleCues = parseTimedTextAuto(sampleValidation.tag, sampleValidation.body);
-    if (sampleCues.length === 0) {
-      throw new Error('No subtitle content found');
-    }
-    
-    // Check first few lines for Japanese characters
-    const sampleText = sampleCues.slice(0, 5).map(c => c.text).join(' ');
-    const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(sampleText);
-    
-    if (!hasJapanese) {
-      console.error("[romaji] subtitle validation FAILED - no Japanese characters detected");
-      console.error("[romaji] sample text:", sampleText.substring(0, 100));
-      alert('The selected subtitles do not contain Japanese text. Please ensure Japanese subtitles are available.');
-      return;
-    }
-    
-    console.log(`[romaji] subtitle validation PASSED - Japanese content confirmed`);
-    
-    const trackName = (track.name && track.name.simpleText) || track.languageCode || 'Unknown';
-    console.log(`[romaji] selected manual track: ${trackName}`);
-    
-    const vid = getCurrentVideoId();
-    const cached = romanizationCache.get(vid);
-    
-    if (cached?.status === 'ready') {
-      console.log('[romaji] using proactively romanized cues');
-      showOverlay(cached.cues);
-    } else if (cached?.status === 'pending') {
-      console.log('[romaji] romanization in progress, waiting for completion');
-      alert('Subtitles are currently being romanized and will be displayed once finished.');
       
-      const checkInterval = setInterval(() => {
-        const updated = romanizationCache.get(vid);
-        if (updated?.status === 'ready') {
-          clearInterval(checkInterval);
-          console.log('[romaji] romanization complete, showing overlay');
-          showOverlay(updated.cues);
-        } else if (updated?.status === 'error') {
-          clearInterval(checkInterval);
-          console.error('[romaji] romanization failed:', updated.error);
-          alert(`Failed to romanize subtitles: ${updated.error}`);
-        }
-      }, 500);
-    } else if (cached?.status === 'error') {
-      console.error('[romaji] proactive romanization failed:', cached.error);
-      alert(`Failed to romanize subtitles: ${cached.error}`);
-    } else {
-      console.log('[romaji] no proactive romanization found, starting now');
-      startProactiveRomanization(vid, tracks);
-      alert('Subtitles are being romanized and will be displayed once finished.');
+      const sampleCues = parseTimedTextAuto(sampleValidation.tag, sampleValidation.body);
+      if (sampleCues.length === 0) {
+        console.error('[romaji] no cues parsed from response');
+        throw new Error('No subtitle content found');
+      }
       
-      const checkInterval = setInterval(() => {
-        const updated = romanizationCache.get(vid);
-        if (updated?.status === 'ready') {
-          clearInterval(checkInterval);
-          console.log('[romaji] romanization complete, showing overlay');
-          showOverlay(updated.cues);
-        } else if (updated?.status === 'error') {
-          clearInterval(checkInterval);
-          console.error('[romaji] romanization failed:', updated.error);
-          alert(`Failed to romanize subtitles: ${updated.error}`);
-        }
-      }, 500);
-    }
+      const sampleText = sampleCues.slice(0, 5).map(c => c.text).join(' ');
+      const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(sampleText);
+      if (!hasJapanese) { 
+        console.warn('[romaji] subtitles are not Japanese, sample:', sampleText);
+        showToast('Selected subtitles are not Japanese', 'error'); 
+        return; 
+      }
+      const trackName = (track.name && track.name.simpleText) || track.languageCode || 'Unknown';
+      console.log(`[romaji] selected ${isAsr ? 'ASR' : 'manual'} track: ${trackName}`);
+      const vid = getCurrentVideoId();
+      const cached = romanizationCache.get(vid);
+      if (cached?.status === 'ready') {
+        showOverlay(cached.cues);
+      } else if (cached?.status === 'pending') {
+        showProgressOverlay('Romanization in progress...');
+        let progressValue = 15;
+        const progressInterval = setInterval(() => {
+          const remaining = 82 - progressValue;
+          const increment = remaining > 30 ? Math.random() * 0.8 : Math.random() * 0.3;
+          progressValue = Math.min(82, progressValue + increment);
+          updateProgressOverlay(progressValue);
+        }, 1000);
+        
+        const checkInterval = setInterval(() => {
+          const updated = romanizationCache.get(vid);
+          if (updated?.status === 'ready') {
+            clearInterval(checkInterval);
+            clearInterval(progressInterval);
+            updateProgressOverlay(100);
+            setTimeout(() => {
+              showOverlay(updated.cues);
+              setTimeout(() => hideProgressOverlay(), 800);
+            }, 300);
+          } else if (updated?.status === 'error') {
+            clearInterval(checkInterval);
+            clearInterval(progressInterval);
+            hideProgressOverlay();
+            showToast(`Romanization failed: ${updated.error}`, 'error');
+          }
+        }, 500);
+      } else if (cached?.status === 'error') {
+        showToast(`Romanization failed: ${cached.error}`, 'error');
+      } else {
+        showProgressOverlay('Starting romanization...');
+        updateProgressOverlay(5);
+        startProactiveRomanization(vid, tracks);
+        
+        let progressValue = 10;
+        const progressInterval = setInterval(() => {
+          const remaining = 82 - progressValue;
+          const increment = remaining > 30 ? Math.random() * 0.8 : Math.random() * 0.3;
+          progressValue = Math.min(82, progressValue + increment);
+          updateProgressOverlay(progressValue);
+        }, 1000);
+        
+        const checkInterval = setInterval(() => {
+          const updated = romanizationCache.get(vid);
+          if (updated?.status === 'ready') {
+            clearInterval(checkInterval);
+            clearInterval(progressInterval);
+            updateProgressOverlay(100);
+            setTimeout(() => {
+              showOverlay(updated.cues);
+              setTimeout(() => hideProgressOverlay(), 800);
+            }, 300);
+          } else if (updated?.status === 'error') {
+            clearInterval(checkInterval);
+            clearInterval(progressInterval);
+            hideProgressOverlay();
+            showToast(`Romanization failed: ${updated.error}`, 'error');
+          }
+        }, 500);
+      }
     } catch (err) {
       console.error("[romaji] onSelectRomaji error:", err);
-      alert('An error occurred while loading captions. Check the console for details.');
+      showToast('Caption load error', 'error');
     } finally {
       activeRomanization = null;
     }
   })();
-  
   return activeRomanization;
 }
 
-// Fetch captions using sniffed URL, trying different formats
-async function fetchCaptionsUsingSniff() {
-  // Ensure we have a sniffed timedtext URL
-  if (!await ensureSniffedTimedtextUrl()) {
-    throw new Error('Could not capture YouTube timedtext URL (pot)');
+// Fetch captions using yt-dlp's proven strategy (lines 3986-3996, 147)
+// Priority: baseUrl as-is → format fallback sequence → error with PO token detection
+async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
+  if (!baseUrl) {
+    throw new Error('No baseUrl provided');
   }
   
-  // Format strategies for manual subtitles only
-  const order = [null, 'vtt', 'ttml', 'json3'];  // null === as-is
+  console.log('[romaji] fetchCaptionsWithFallback - baseUrl length:', baseUrl.length, 'isASR:', isASR);
   
-  for (const fmt of order) {
-    const url = fmt ? withFmt(lastTimedtextUrl, fmt) : lastTimedtextUrl;
-    const fmtLabel = fmt ?? 'asis';
+  // yt-dlp format preferences (line 147: json3, srv1, srv2, srv3, ttml, srt, vtt)
+  // ASR subtitles: Prefer json3/srv formats (more reliable for auto-generated)
+  // Manual subtitles: Prefer json3 then ttml/vtt
+  const formats = isASR 
+    ? ['json3', 'srv3', 'srv1', 'srv2', 'vtt', 'ttml'] 
+    : ['json3', 'srv1', 'srv2', 'srv3', 'ttml', 'vtt'];
+  
+  // yt-dlp philosophy: Just try everything. Don't check for PO tokens upfront.
+  
+  // ALWAYS try baseUrl as-is first (YouTube may have already set optimal fmt)
+  console.log('[romaji] trying baseUrl as-is (YouTube\'s default format)...');
+  let result = await fetchRaw(baseUrl);
+  let lastStatus = result.status;
+  
+  if (result.ok && result.text && result.text.trim().length > 0) {
+    console.log('[romaji] SUCCESS with baseUrl as-is, length:', result.text.length);
+    return { ok: true, tag: 'as-is', body: result.text, ct: result.ct };
+  }
+  
+  // Log warning but keep trying (yt-dlp behavior)
+  if (lastStatus === 403 || lastStatus === 401) {
+    console.warn('[romaji] baseUrl returned', lastStatus, '- trying format variations...');
+  } else {
+    console.log('[romaji] baseUrl as-is failed - ok:', result.ok, 'length:', result.text?.length || 0);
+  }
+  
+  // Try each format in order, stop at first non-empty success (yt-dlp behavior)
+  for (const fmt of formats) {
+    const url = buildTimedTextUrl(baseUrl, { fmt });
+    console.log(`[romaji] trying fmt=${fmt}...`);
     
-    console.log(`[romaji] trying ${fmtLabel}...`);
-    const r = await fetchRaw(url);
+    result = await fetchRaw(url);
+    lastStatus = result.status;
     
-    if (r.ok) {
-      return { ok: true, tag: fmtLabel, body: r.text, ct: r.ct };
+    if (result.ok && result.text && result.text.trim().length > 0) {
+      console.log(`[romaji] SUCCESS with fmt=${fmt}, length:`, result.text.length);
+      return { ok: true, tag: fmt, body: result.text, ct: result.ct };
+    }
+    console.log(`[romaji] fmt=${fmt} failed - ok:`, result.ok, 'status:', result.status, 'length:', result.text?.length || 0);
+  }
+  
+  // ONLY NOW report the error (after all attempts exhausted)
+  // yt-dlp lines 4050-4053: Reports skipped subtitles but tries next client
+  console.error('[romaji] all format attempts failed, last status:', lastStatus);
+  
+  if (lastStatus === 403) {
+    console.error('[romaji] All formats returned 403 - video may require authentication or PO token');
+    return { 
+      ok: false, 
+      error: 'Access denied. This video may require authentication or be geo-restricted.',
+      needsPoToken: true,
+      status: lastStatus
+    };
+  }
+  
+  if (lastStatus === 401) {
+    console.error('[romaji] All formats returned 401 - authentication required');
+    return {
+      ok: false,
+      error: 'Authentication required. You may need to be logged into YouTube.',
+      needsPoToken: true,
+      status: lastStatus
+    };
+  }
+  
+  return { 
+    ok: false, 
+    error: 'All format attempts returned empty responses',
+    status: lastStatus
+  };
+}
+
+// Legacy function - redirects to baseUrl extraction + yt-dlp fetch
+// DEPRECATED: Prefer getting baseUrl from track and calling fetchCaptionsWithFallback directly
+async function fetchCaptionsUsingSniff(preferAsr = false) {
+  console.log('[romaji] fetchCaptionsUsingSniff (LEGACY) - preferAsr:', preferAsr);
+  
+  // Get baseUrl from track (no sniffing needed)
+  const baseUrl = await getTimedtextUrlFromTrack(preferAsr);
+  if (!baseUrl) {
+    throw new Error('Could not get timedtext baseUrl from track');
+  }
+  
+  console.log('[romaji] using track baseUrl (length:', baseUrl.length, ')');
+  
+  // Use yt-dlp strategy
+  return await fetchCaptionsWithFallback(baseUrl, preferAsr);
+}
+
+async function getTimedtextUrlFromTrack(preferAsr = false) {
+  const vid = getCurrentVideoId();
+  if (!vid) return null;
+  
+  let tracks = getCachedTracks();
+  
+  if (!tracks || tracks.length === 0) {
+    console.log('[romaji] no cached tracks, fetching playerResponse');
+    const result = await fetchPlayerResponseFallback(vid);
+    if (result.ok && result.data) {
+      const captionData = result.data.captions?.playerCaptionsTracklistRenderer;
+      if (captionData?.captionTracks) {
+        tracks = captionData.captionTracks;
+        latestTracksByVideo.set(vid, tracks);
+        console.log('[romaji] fetched', tracks.length, 'tracks from playerResponse');
+      }
     }
   }
   
-  throw new Error('All format attempts returned empty');
+  if (!tracks || tracks.length === 0) {
+    console.warn('[romaji] no tracks available');
+    return null;
+  }
+  
+  console.log('[romaji] available tracks:', tracks.map(t => `${t.languageCode} (${t.kind || 'manual'})`).join(', '));
+  
+  let track = null;
+  if (preferAsr) {
+    track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
+    if (!track) track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+  } else {
+    track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+    if (!track) track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
+  }
+  
+  if (!track) {
+    console.warn('[romaji] no Japanese track found');
+    console.log('[romaji] all tracks:', tracks);
+    return null;
+  }
+  
+  if (!track.baseUrl) {
+    console.warn('[romaji] track found but no baseUrl:', track);
+    return null;
+  }
+  
+  console.log('[romaji] selected track:', track.languageCode, track.kind || 'manual', 'baseUrl length:', track.baseUrl.length);
+  
+  return track.baseUrl;
 }
-
 // Auto-detect and parse caption text
 function parseTimedTextAuto(tag, body) {
-  // Try format based on tag
+  let cues = [];
   if (tag === 'json3' || tag === 'srv3') {
-    const cues = parseJson3(body);
+    cues = parseJson3(body);
     if (cues.length > 0) return cues;
   }
-  
   if (tag === 'vtt' || tag === 'asis') {
-    const cues = parseVtt(body);
+    cues = parseVtt(body);
     if (cues.length > 0) return cues;
   }
-  
   if (tag === 'ttml') {
-    const cues = parseTtml(body);
+    cues = parseTtml(body);
     if (cues.length > 0) return cues;
   }
-  
-  // Fallback: try all parsers
-  let cues = parseJson3(body);
+  cues = parseJson3(body);
   if (cues.length > 0) return cues;
-  
   cues = parseVtt(body);
   if (cues.length > 0) return cues;
-  
   return parseTtml(body);
 }
 
@@ -794,7 +1108,6 @@ function fetchPlayerResponseFallback(videoId) {
         type: 'FETCH_PLAYER_RESPONSE', 
         videoId, 
         ytcfg: {
-          key: latestYtCfg.INNERTUBE_API_KEY,
           clientName: latestYtCfg.INNERTUBE_CLIENT_NAME || 'WEB',
           clientVersion: latestYtCfg.INNERTUBE_CLIENT_VERSION,
           visitor: latestYtCfg.VISITOR_DATA,
@@ -834,45 +1147,45 @@ async function onSelectCustom(storageKey) {
 // Parse VTT format
 function parseVtt(vttText) {
   const cues = [];
-  const lines = vttText.split('\n');
+  const lines = vttText.replace(/\r/g, '').split('\n');
   let i = 0;
-  
-  // Skip WEBVTT header
-  while (i < lines.length && !lines[i].includes('-->')) {
-    i++;
+  function parseTime(str) {
+    const s = str.trim().replace(',', '.');
+    const main = s.split(/\s+/)[0];
+    const parts = main.split(':');
+    if (parts.length === 3) {
+      const h = parseInt(parts[0], 10) || 0;
+      const m = parseInt(parts[1], 10) || 0;
+      const sec = parseFloat(parts[2]) || 0;
+      return h * 3600 + m * 60 + sec;
+    }
+    if (parts.length === 2) {
+      const m = parseInt(parts[0], 10) || 0;
+      const sec = parseFloat(parts[1]) || 0;
+      return m * 60 + sec;
+    }
+    const f = parseFloat(main);
+    return isNaN(f) ? 0 : f;
   }
-  
+  while (i < lines.length && !lines[i].includes('-->')) i++;
   while (i < lines.length) {
     const line = lines[i].trim();
-    
-    // Look for timestamp line
     if (line.includes('-->')) {
-      const match = line.match(/(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/);
-      if (match) {
-        const startMs = parseInt(match[1]) * 3600000 + parseInt(match[2]) * 60000 + parseInt(match[3]) * 1000 + parseInt(match[4]);
-        const endMs = parseInt(match[5]) * 3600000 + parseInt(match[6]) * 60000 + parseInt(match[7]) * 1000 + parseInt(match[8]);
-        
-        // Collect text lines until blank line
+      const [startStr, endStr] = line.split('-->');
+      const start = parseTime(startStr);
+      const end = parseTime(endStr);
+      i++;
+      const textLines = [];
+      while (i < lines.length && lines[i].trim()) {
+        const t = lines[i].replace(/^\d+$/, '').trim();
+        if (t) textLines.push(t);
         i++;
-        const textLines = [];
-        while (i < lines.length && lines[i].trim()) {
-          textLines.push(lines[i].trim());
-          i++;
-        }
-        
-        const text = textLines.join('\n').trim();
-        if (text) {
-          cues.push({
-            start: startMs / 1000,
-            end: endMs / 1000,
-            text: text
-          });
-        }
       }
+      const text = textLines.join('\n').trim();
+      if (text) cues.push({ start, end, text });
     }
     i++;
   }
-  
   return cues;
 }
 
@@ -919,29 +1232,44 @@ function parseTtml(ttmlText) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(ttmlText, 'text/xml');
     const cues = [];
-    
-    // Try <text> tags (YouTube format)
-    let elements = doc.querySelectorAll('text');
-    if (elements.length === 0) {
-      // Try <p> tags (standard TTML)
-      elements = doc.querySelectorAll('p');
-    }
-    
-    for (const elem of elements) {
-      const start = parseFloat(elem.getAttribute('start') || elem.getAttribute('begin') || '0');
-      const dur = parseFloat(elem.getAttribute('dur') || elem.getAttribute('duration') || '0');
-      const end = elem.getAttribute('end') ? parseFloat(elem.getAttribute('end')) : start + dur;
-      const text = elem.textContent.trim();
-      
-      if (text) {
-        cues.push({
-          start: start,
-          end: end,
-          text: text
-        });
+    function parseClockOrOffset(v) {
+      if (!v) return 0;
+      const s = String(v).trim();
+      if (/^\d+(?:\.\d+)?s$/i.test(s)) {
+        return parseFloat(s) || 0;
       }
+      if (/^\d+(?:\.\d+)?ms$/i.test(s)) {
+        return (parseFloat(s) || 0) / 1000;
+      }
+      if (s.includes(':')) {
+        const parts = s.split(':');
+        if (parts.length === 3) {
+          const h = parseInt(parts[0], 10) || 0;
+          const m = parseInt(parts[1], 10) || 0;
+          const sec = parseFloat(parts[2]) || 0;
+          return h * 3600 + m * 60 + sec;
+        }
+        if (parts.length === 2) {
+          const m = parseInt(parts[0], 10) || 0;
+          const sec = parseFloat(parts[1]) || 0;
+          return m * 60 + sec;
+        }
+      }
+      const num = parseFloat(s);
+      if (!isNaN(num)) {
+        return num >= 1000 ? num / 1000 : num;
+      }
+      return 0;
     }
-    
+    let elements = doc.querySelectorAll('text');
+    if (elements.length === 0) elements = doc.querySelectorAll('p');
+    for (const elem of elements) {
+      const start = parseClockOrOffset(elem.getAttribute('start') || elem.getAttribute('begin'));
+      const dur = parseClockOrOffset(elem.getAttribute('dur') || elem.getAttribute('duration'));
+      const end = elem.hasAttribute('end') ? parseClockOrOffset(elem.getAttribute('end')) : (start + dur);
+      const text = (elem.textContent || '').trim();
+      if (text) cues.push({ start, end, text });
+    }
     return cues;
   } catch (err) {
     console.warn('[romaji] TTML parse error:', err);
@@ -953,19 +1281,40 @@ function parseTtml(ttmlText) {
 // ROMANIZATION
 // ============================================================================
 
-async function romanizeCues(cues) {
+async function romanizeCues(cues, showProgress = true) {
   if (!cues?.length) return cues;
   console.log('[romaji] romanizing', cues.length, 'cues via API');
   
   const videoId = getCurrentVideoId();
   const fullText = cues.map(c => c.text).join('\n');
   
+  if (showProgress) {
+    showProgressOverlay('Romanizing subtitles...');
+    updateProgressOverlay(5);
+  }
+  
   try {
+    if (showProgress) updateProgressOverlay(10);
+    
+    let progressInterval = null;
+    if (showProgress) {
+      let currentProgress = 10;
+      progressInterval = setInterval(() => {
+        const remaining = 80 - currentProgress;
+        const increment = remaining > 30 ? Math.random() * 0.8 : Math.random() * 0.3;
+        currentProgress = Math.min(80, currentProgress + increment);
+        updateProgressOverlay(currentProgress);
+      }, 1000);
+    }
+    
     const response = await fetch('https://youtube-romaji-api.fly.dev/romanize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId, text: fullText })
     });
+    
+    if (progressInterval) clearInterval(progressInterval);
+    if (showProgress) updateProgressOverlay(85);
     
     if (!response.ok) {
       throw new Error(`API error: ${response.status}`);
@@ -973,6 +1322,8 @@ async function romanizeCues(cues) {
     
     const data = await response.json();
     console.log('[romaji] API response cached:', data.cached);
+    
+    if (showProgress) updateProgressOverlay(90);
     
     const isTimed = data.timed && (data.vtt || data.segments);
     if (isTimed) {
@@ -983,6 +1334,9 @@ async function romanizeCues(cues) {
         const timedCues = parseVtt(data.vtt);
         if (timedCues.length > 0) {
           console.log('[romaji] parsed', timedCues.length, 'timed cues from vtt');
+          if (showProgress) {
+            updateProgressOverlay(100);
+          }
           return timedCues;
         }
         console.log('[romaji] vtt parsing failed, falling back to segments');
@@ -992,12 +1346,18 @@ async function romanizeCues(cues) {
         const timedCues = parseVtt(data.vtt);
         if (timedCues.length > 0) {
           console.log('[romaji] parsed', timedCues.length, 'timed cues from vtt');
+          if (showProgress) {
+            updateProgressOverlay(100);
+          }
           return timedCues;
         }
       }
       
       if (data.segments && Array.isArray(data.segments)) {
         console.log('[romaji] using', data.segments.length, 'timed segments');
+        if (showProgress) {
+          updateProgressOverlay(100);
+        }
         return data.segments.map(s => ({
           start: s.start,
           end: s.end,
@@ -1007,6 +1367,8 @@ async function romanizeCues(cues) {
       
       console.warn('[romaji] timed flag set but no valid vtt or segments, falling back to untimed');
     }
+    
+    if (showProgress) updateProgressOverlay(93);
     
     const romanizedLines = data.romanized.split('\n');
     const r = [];
@@ -1018,22 +1380,20 @@ async function romanizeCues(cues) {
       });
     }
     
-    // Merge consecutive cues with identical text to prevent flicker
+    if (showProgress) updateProgressOverlay(96);
+    
     const merged = [];
     for (let i = 0; i < r.length; i++) {
       const cue = r[i];
       
-      // Skip empty cues
       if (!cue.text || cue.text.trim() === '') {
         continue;
       }
       
-      // Check if next cue has the same text (continuation/timing split)
       let endTime = cue.end;
       while (i + 1 < r.length && r[i + 1].text === cue.text) {
-        // Extend end time to include next cue
         endTime = r[i + 1].end;
-        i++; // Skip the duplicate cue
+        i++;
       }
       
       merged.push({
@@ -1048,10 +1408,16 @@ async function romanizeCues(cues) {
     }
     
     console.log('[romaji] romanized', cues.length, 'cues →', merged.length, 'after merging duplicates');
+    
+    if (showProgress) {
+      updateProgressOverlay(100);
+    }
+    
     return merged;
   } catch (error) {
     console.error('[romaji] API call failed:', error);
-    alert('Failed to romanize subtitles. Please try again later.');
+    if (showProgress) hideProgressOverlay();
+    showToast('Failed to romanize subtitles. Please try again later.', 'error');
     return cues;
   }
 }
@@ -1069,9 +1435,214 @@ function ensureOverlay(visible) {
     }
     overlayEl = document.createElement("div");
     overlayEl.id = "romaji-caption-overlay";
+    
+    overlayEl.style.position = 'absolute';
+    overlayEl.style.left = '0';
+    overlayEl.style.right = '0';
+    overlayEl.style.bottom = '60px';
+    overlayEl.style.margin = '0 auto';
+    overlayEl.style.width = '100%';
+    overlayEl.style.maxWidth = 'none';
+    overlayEl.style.padding = '0 12%';
+    overlayEl.style.boxSizing = 'border-box';
+    overlayEl.style.pointerEvents = 'none';
+    overlayEl.style.lineHeight = '1.3';
+    overlayEl.style.textAlign = 'center';
+    overlayEl.style.zIndex = '68';
+    overlayEl.style.whiteSpace = 'pre-wrap';
+    overlayEl.style.wordWrap = 'break-word';
+    
     playerContainer.appendChild(overlayEl);
+    console.log('[romaji] overlay element created and appended');
   }
+  
   overlayEl.style.display = visible ? "block" : "none";
+  console.log('[romaji] overlay visibility set to:', visible ? 'block' : 'none');
+  
+  if (visible) {
+    applyYouTubeCaptionSettings();
+  }
+}
+
+function applyYouTubeCaptionSettings() {
+  if (!overlayEl) return;
+  
+  try {
+    const settings = getYouTubeCaptionSettings();
+    
+    overlayEl.style.setProperty('font-family', settings.fontFamily, 'important');
+    overlayEl.style.setProperty('color', settings.textColor, 'important');
+    overlayEl.style.setProperty('font-size', settings.fontSize, 'important');
+    overlayEl.style.setProperty('opacity', settings.textOpacity, 'important');
+    
+    if (settings.backgroundColor && settings.backgroundOpacity > 0) {
+      overlayEl.style.setProperty('background-color', settings.backgroundColor, 'important');
+      overlayEl.style.setProperty('padding', '8px 16px', 'important');
+      overlayEl.style.setProperty('border-radius', '4px', 'important');
+      overlayEl.style.setProperty('display', 'inline-block', 'important');
+      overlayEl.style.setProperty('max-width', '80%', 'important');
+      overlayEl.style.setProperty('margin', '0 auto', 'important');
+    } else {
+      overlayEl.style.setProperty('background-color', 'transparent', 'important');
+      overlayEl.style.setProperty('padding', '0', 'important');
+    }
+    
+    const edgeStyle = settings.textEdgeStyle;
+    if (edgeStyle === 'none') {
+      overlayEl.style.setProperty('text-shadow', 'none', 'important');
+    } else if (edgeStyle === 'drop-shadow') {
+      overlayEl.style.setProperty('text-shadow', '2px 2px 4px rgba(0,0,0,0.9)', 'important');
+    } else if (edgeStyle === 'raised') {
+      overlayEl.style.setProperty('text-shadow', '1px 1px 0 rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.5)', 'important');
+    } else if (edgeStyle === 'depressed') {
+      overlayEl.style.setProperty('text-shadow', '-1px -1px 0 rgba(0,0,0,0.9), -2px -2px 0 rgba(0,0,0,0.5)', 'important');
+    } else {
+      overlayEl.style.setProperty('text-shadow', settings.textShadow, 'important');
+    }
+    
+    if (settings.windowColor && settings.windowOpacity > 0) {
+      const player = document.querySelector('.html5-video-player');
+      if (player && !player.querySelector('#romaji-window-background')) {
+        const windowBg = document.createElement('div');
+        windowBg.id = 'romaji-window-background';
+        windowBg.style.position = 'absolute';
+        windowBg.style.left = '0';
+        windowBg.style.right = '0';
+        windowBg.style.bottom = '60px';
+        windowBg.style.height = '120px';
+        windowBg.style.backgroundColor = settings.windowColor;
+        windowBg.style.opacity = settings.windowOpacity;
+        windowBg.style.pointerEvents = 'none';
+        windowBg.style.zIndex = '67';
+        player.appendChild(windowBg);
+      }
+    } else {
+      const existingBg = document.querySelector('#romaji-window-background');
+      if (existingBg) existingBg.remove();
+    }
+    
+  } catch (e) {
+    console.error('[romaji] failed to apply caption settings:', e);
+  }
+}
+
+function getYouTubeCaptionSettings() {
+  const defaults = {
+    fontFamily: '"YouTube Noto", "Roboto", Arial, Helvetica, sans-serif',
+    textColor: 'rgb(255, 255, 255)',
+    fontSize: 'min(4.2vw, 28px)',
+    textOpacity: '1',
+    backgroundColor: 'transparent',
+    backgroundOpacity: 0,
+    windowColor: 'transparent',
+    windowOpacity: 0,
+    textEdgeStyle: 'uniform',
+    textShadow: '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.8)'
+  };
+  
+  try {
+    const rawSettings = localStorage.getItem('yt-player-caption-display-settings');
+    if (!rawSettings) {
+      console.log('[romaji] no saved caption settings, using defaults');
+      return defaults;
+    }
+    
+    const parsed = JSON.parse(rawSettings);
+    console.log('[romaji] parsed caption settings:', parsed);
+    
+    const fontMap = {
+      0: '"Courier New", Courier, monospace',
+      1: '"Times New Roman", Times, serif',
+      2: 'Georgia, serif',
+      3: '"Arial", Helvetica, sans-serif',
+      4: '"Comic Sans MS", "Comic Sans", cursive',
+      5: '"Lucida Console", Monaco, monospace',
+      6: '"Roboto", Arial, sans-serif',
+      7: '"Consolas", "Courier New", monospace'
+    };
+    
+    const edgeMap = {
+      0: 'none',
+      1: 'uniform',
+      2: 'drop-shadow',
+      3: 'raised',
+      4: 'depressed'
+    };
+    
+    if (parsed.fontSizeIncrement !== undefined) {
+      const sizeMap = {
+        '-2': 'min(2.8vw, 18px)',
+        '-1': 'min(3.5vw, 23px)',
+        '0': 'min(4.2vw, 28px)',
+        '1': 'min(5.6vw, 37px)',
+        '2': 'min(7.0vw, 46px)'
+      };
+      defaults.fontSize = sizeMap[parsed.fontSizeIncrement] || defaults.fontSize;
+    }
+    
+    if (parsed.textColor !== undefined) {
+      defaults.textColor = rgbaFromYT(parsed.textColor);
+      console.log('[romaji] applying text color:', defaults.textColor);
+    }
+    
+    if (parsed.textOpacity !== undefined) {
+      defaults.textOpacity = String(parsed.textOpacity);
+      console.log('[romaji] applying text opacity:', defaults.textOpacity);
+    }
+    
+    if (parsed.background !== undefined) {
+      defaults.backgroundColor = rgbaFromYT(parsed.background);
+      defaults.backgroundOpacity = parsed.backgroundOpacity !== undefined ? parsed.backgroundOpacity : 0;
+      console.log('[romaji] applying background:', defaults.backgroundColor, 'opacity:', defaults.backgroundOpacity);
+    }
+    
+    if (parsed.window !== undefined) {
+      defaults.windowColor = rgbaFromYT(parsed.window);
+      defaults.windowOpacity = parsed.windowOpacity !== undefined ? String(parsed.windowOpacity) : '0';
+      console.log('[romaji] applying window:', defaults.windowColor, 'opacity:', defaults.windowOpacity);
+    }
+    
+    if (parsed.fontFamily !== undefined) {
+      defaults.fontFamily = fontMap[parsed.fontFamily] || defaults.fontFamily;
+      console.log('[romaji] applying font family:', defaults.fontFamily);
+    }
+    
+    if (parsed.charEdgeStyle !== undefined) {
+      const style = edgeMap[parsed.charEdgeStyle];
+      defaults.textEdgeStyle = style || 'uniform';
+      
+      if (style === 'uniform') {
+        defaults.textShadow = '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 4px rgba(0,0,0,0.8)';
+      } else if (style === 'drop-shadow') {
+        defaults.textShadow = '2px 2px 4px rgba(0,0,0,0.9)';
+      } else if (style === 'raised') {
+        defaults.textShadow = '1px 1px 0 rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.5)';
+      } else if (style === 'depressed') {
+        defaults.textShadow = '-1px -1px 0 rgba(0,0,0,0.9), -2px -2px 0 rgba(0,0,0,0.5)';
+      } else if (style === 'none') {
+        defaults.textShadow = 'none';
+      }
+      console.log('[romaji] applying edge style:', style);
+    }
+    
+    return defaults;
+    
+  } catch (e) {
+    console.warn('[romaji] failed to parse caption settings:', e);
+    return defaults;
+  }
+}
+
+function rgbaFromYT(val) {
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') {
+    const r = (val >> 24) & 0xFF;
+    const g = (val >> 16) & 0xFF;
+    const b = (val >> 8) & 0xFF;
+    const a = (val & 0xFF) / 255;
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+  return 'rgb(255, 255, 255)';
 }
 
 function showOverlay(cues) {
@@ -1087,7 +1658,21 @@ function showOverlay(cues) {
   }
   
   console.log("[romaji] showing overlay with", cues.length, "cues");
+  console.log("[romaji] first cue:", cues[0]);
+  
   ensureOverlay(true);
+  
+  if (!overlayEl) {
+    console.error("[romaji] overlay element not created!");
+    hideProgressOverlay();
+    showToast("Failed to create caption overlay", "error");
+    return;
+  }
+  
+  console.log("[romaji] overlay element:", overlayEl);
+  console.log("[romaji] overlay display:", overlayEl.style.display);
+  console.log("[romaji] overlay visible:", overlayEl.offsetParent !== null);
+  
   if (renderer) renderer.stop();
   renderer = new CaptionRenderer(videoEl, overlayEl, cues);
   renderer.start();
@@ -1096,6 +1681,8 @@ function showOverlay(cues) {
   updateMenuCheckmarks();
   updateCaptionButton();
   startSubtitleDisplayWatcher();
+  
+  setTimeout(() => hideProgressOverlay(), 1000);
 }
 
 function setNativeCaptionsVisible(visible) {
@@ -1131,7 +1718,7 @@ function updateMenuCheckmarks() {
       item.setAttribute('aria-checked', 'false');
     });
     
-    updateSubtitleDisplay('Romaji');
+            updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
   } else {
     document.body.classList.remove('romaji-active');
   }
@@ -1184,7 +1771,7 @@ function updateCaptionButton() {
   setTimeout(() => {
     const captionDisplay = document.querySelector('.ytp-subtitles-button .ytp-subtitles-button-text');
     if (captionDisplay && isRomajiActive) {
-      captionDisplay.textContent = 'Romaji';
+      captionDisplay.textContent = asrModeActive ? 'Romaji (auto)' : 'Romaji';
     }
   }, 100);
 }
@@ -1197,10 +1784,21 @@ class CaptionRenderer {
     this.raf = null;
     this.index = 0;
     this.active = -1;
+    this.settingsCheckInterval = null;
   }
   
   start() {
     this.stop();
+    console.log('[romaji] CaptionRenderer starting with', this.cues.length, 'cues');
+    console.log('[romaji] video element:', this.video);
+    console.log('[romaji] host element:', this.host);
+    
+    applyYouTubeCaptionSettings();
+    
+    this.settingsCheckInterval = setInterval(() => {
+      applyYouTubeCaptionSettings();
+    }, 500);
+    
     const loop = () => {
       const t = this.video.currentTime;
       let i = this.index;
@@ -1213,6 +1811,9 @@ class CaptionRenderer {
         if (this.active !== i) {
           this.active = i;
           this.host.textContent = cue.text;
+          if (i < 5) {
+            console.log('[romaji] showing cue', i, ':', cue.text.substring(0, 50));
+          }
         }
       } else {
         if (this.active !== -1) {
@@ -1223,15 +1824,21 @@ class CaptionRenderer {
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
+    console.log('[romaji] CaptionRenderer loop started');
   }
   
   stop() {
     if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.settingsCheckInterval) clearInterval(this.settingsCheckInterval);
     this.raf = null;
+    this.settingsCheckInterval = null;
     this.host.textContent = "";
     this.index = 0;
     this.active = -1;
     setNativeCaptionsVisible(true);
+    
+    const windowBg = document.querySelector('#romaji-window-background');
+    if (windowBg) windowBg.remove();
   }
 }
 
