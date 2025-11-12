@@ -126,6 +126,39 @@
   function getCaptionTracks(pr) {
     const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     
+    if (tracks.length > 0) {
+      console.log('[romaji-bridge] ========================================');
+      console.log('[romaji-bridge] RAW TRACKS FROM YOUTUBE playerResponse:');
+      console.log('[romaji-bridge] Total tracks:', tracks.length);
+      tracks.forEach((t, idx) => {
+        console.log(`[romaji-bridge] Track ${idx}:`, {
+          languageCode: t.languageCode,
+          kind: t.kind,
+          name: t.name?.simpleText || t.name,
+          vssId: t.vssId,
+          isTranslatable: t.isTranslatable,
+          baseUrlLength: t.baseUrl?.length,
+          baseUrlFirst300: t.baseUrl?.substring(0, 300),
+          baseUrlHasCapAsr: t.baseUrl?.includes('&caps=asr'),
+          baseUrlHasKindAsr: t.baseUrl?.includes('&kind=asr'),
+          baseUrlParams: (() => {
+            try {
+              const url = new URL(t.baseUrl);
+              return {
+                lang: url.searchParams.get('lang'),
+                caps: url.searchParams.get('caps'),
+                kind: url.searchParams.get('kind'),
+                fmt: url.searchParams.get('fmt')
+              };
+            } catch {
+              return 'invalid URL';
+            }
+          })()
+        });
+      });
+      console.log('[romaji-bridge] ========================================');
+    }
+    
     return tracks.map(track => {
       const baseUrl = track.baseUrl || '';
       
@@ -133,6 +166,14 @@
       const isAsrByUrl = baseUrl.includes('&caps=asr') || baseUrl.includes('&kind=asr');
       
       const correctedKind = (isAsrByKind || isAsrByUrl) ? 'asr' : track.kind || null;
+      
+      console.log(`[romaji-bridge] Processing track ${track.languageCode}:`, {
+        originalKind: track.kind,
+        isAsrByKind,
+        isAsrByUrl,
+        correctedKind,
+        baseUrlPreview: baseUrl.substring(0, 200)
+      });
       
       return {
         baseUrl: baseUrl || null,
