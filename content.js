@@ -22,7 +22,6 @@ let latestYtCfg = {};
 let lastVideoId = null;
 
 let lastTimedtextUrl = null;
-let lastTimedtextUrlASR = null;
 let lastVideoIdForTimedtext = null;
 
 let menuWired = false;
@@ -31,7 +30,6 @@ let captionMenuObserver = null;
 
 let activeRomanization = null;
 let tracksLoggedThisNav = false;
-let asrModeActive = false;
 
 const SELECTOR_PLAYER = "ytd-player";
 const CAPTION_PANEL_TITLE_RE = /Subtitles|Captions|字幕|자막/i;
@@ -264,30 +262,30 @@ async function fetchRaw(url) {
 const romanizationCache = new Map(); // videoId -> { status: 'pending'|'ready'|'error', cues: [...] }
 
 async function startProactiveRomanization(videoId, tracks) {
+  // ONLY proactively romanize MANUAL Japanese subtitles
   const manualTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-  const asrTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
-  const chosen = manualTrack || asrTrack;
-  if (!chosen) { console.log('[romaji] no JA track for proactive romanization'); return; }
   
-  // yt-dlp methodology: use baseUrl directly from track
-  if (!chosen.baseUrl) {
-    console.warn('[romaji] chosen track missing baseUrl, cannot start proactive romanization');
+  if (!manualTrack) {
+    console.log('[romaji] no MANUAL Japanese track for proactive romanization - skipping (ASR not supported)');
     return;
   }
   
-  const isAsr = chosen.kind === 'asr';
+  if (!manualTrack.baseUrl) {
+    console.warn('[romaji] manual track missing baseUrl, cannot start proactive romanization');
+    return;
+  }
   
   if (romanizationCache.has(videoId)) {
     console.log('[romaji] already romanizing or romanized:', videoId);
     return;
   }
   
-  console.log('[romaji] starting proactive romanization for:', videoId, 'track:', chosen.languageCode, isAsr ? 'ASR' : 'manual');
+  console.log('[romaji] starting proactive romanization for:', videoId, 'track:', manualTrack.languageCode, 'MANUAL');
   romanizationCache.set(videoId, { status: 'pending', cues: null });
   
   try {
-    // Use yt-dlp strategy directly with track baseUrl
-    const fetchResult = await fetchCaptionsWithFallback(chosen.baseUrl, isAsr);
+    // Use yt-dlp strategy directly with track baseUrl (manual subtitles only)
+    const fetchResult = await fetchCaptionsWithFallback(manualTrack.baseUrl);
     if (!fetchResult.ok) {
       throw new Error(fetchResult.error);
     }
@@ -355,17 +353,11 @@ window.addEventListener('message', (e) => {
     }
     
     lastVideoIdForTimedtext = currentVid;
-    
-    if (d.isASR) {
-      lastTimedtextUrlASR = d.url;
-      console.log('[romaji] sniffed ASR timedtext url (will use as fallback)');
-    } else {
-      lastTimedtextUrl = d.url;
-      console.log('[romaji] sniffed manual timedtext url:', lastTimedtextUrl);
-    }
+    lastTimedtextUrl = d.url;
+    console.log('[romaji] sniffed manual timedtext url:', lastTimedtextUrl);
     
     try {
-      if (lastTimedtextUrl || lastTimedtextUrlASR) {
+      if (lastTimedtextUrl) {
         const tracks = latestTracksByVideo.get(currentVid);
         if (tracks && tracks.length > 0) {
           startProactiveRomanization(currentVid, tracks);
@@ -442,7 +434,6 @@ async function onNavigation() {
   tracksLoggedThisNav = false;
   
   lastTimedtextUrl = null;
-  lastTimedtextUrlASR = null;
   lastVideoIdForTimedtext = null;
   
   if (renderer) renderer.stop();
@@ -491,11 +482,10 @@ function tryWireCaptionMenu() {
       setTimeout(() => {
         const tracks = getCachedTracks();
         const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
-        const hasAsrJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind === 'asr');
-        if (hasManualJa || hasAsrJa) {
+        if (hasManualJa) {
           updateSubtitleCount();
           if (isRomajiActive) {
-            updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
+            updateSubtitleDisplay('Romaji');
             startSubtitleDisplayWatcher();
           }
         }
@@ -515,11 +505,10 @@ function tryWireCaptionMenu() {
             setTimeout(() => {
               const tracks = getCachedTracks();
               const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
-              const hasAsrJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind === 'asr');
-              if (hasManualJa || hasAsrJa) {
+              if (hasManualJa) {
                 updateSubtitleCount();
                 if (isRomajiActive) {
-                  updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
+                  updateSubtitleDisplay('Romaji');
                   startSubtitleDisplayWatcher();
                 }
               }
@@ -551,7 +540,7 @@ function startSubtitleDisplayWatcher() {
   
   subtitleDisplayObserver = new MutationObserver(() => {
     if (isRomajiActive) {
-      const label = asrModeActive ? 'Romaji (auto)' : 'Romaji';
+      const label = 'Romaji';
       if (contentEl.textContent !== label) contentEl.textContent = label;
     }
   });
@@ -584,9 +573,10 @@ async function injectCaptionEntries(menuEl) {
   const tracks = getCachedTracks();
   console.log('[romaji] cached tracks:', tracks.length, tracks);
   const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
-  const hasAsrJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind === 'asr');
-  if (hasManualJa) frag.appendChild(buildMenuItem("Romaji", onSelectRomaji, "romaji:auto"));
-  else if (hasAsrJa) frag.appendChild(buildMenuItem("Romaji (auto)", onSelectRomaji, "romaji:auto"));
+  // ONLY show Romaji option if MANUAL Japanese subtitles exist (no ASR support)
+  if (hasManualJa) {
+    frag.appendChild(buildMenuItem("Romaji", onSelectRomaji, "romaji:auto"));
+  }
   
   const customTracks = await listCustomTracks();
   for (const track of customTracks) {
@@ -605,7 +595,7 @@ async function injectCaptionEntries(menuEl) {
   
   updateMenuCheckmarks();
   
-  if (isRomajiActive) setTimeout(() => updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji'), 0);
+  if (isRomajiActive) setTimeout(() => updateSubtitleDisplay('Romaji'), 0);
   
   menuEl.querySelectorAll('.ytp-menuitem[role="menuitemradio"]').forEach(item => {
     if (!item.hasAttribute('data-romaji-entry')) {
@@ -663,7 +653,7 @@ function buildMenuItem(label, onClick, entryKey) {
         setTimeout(() => {
           updateSubtitleCount();
           if (isRomajiActive) {
-            updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
+            updateSubtitleDisplay('Romaji');
             startSubtitleDisplayWatcher();
           }
         }, 50);
@@ -687,7 +677,7 @@ function buildMenuItem(label, onClick, entryKey) {
           setTimeout(() => {
             updateSubtitleCount();
             if (isRomajiActive) {
-              updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
+              updateSubtitleDisplay('Romaji');
               startSubtitleDisplayWatcher();
             }
           }, 50);
@@ -719,18 +709,11 @@ async function ensureSniffedTimedtextUrl() {
   if (lastVideoIdForTimedtext !== currentVid) {
     console.log('[romaji] clearing stale timedtext URLs (video changed)');
     lastTimedtextUrl = null;
-    lastTimedtextUrlASR = null;
     lastVideoIdForTimedtext = null;
   }
   
   if (lastTimedtextUrl && lastVideoIdForTimedtext === currentVid) {
     console.log('[romaji] using cached manual timedtext URL');
-    return true;
-  }
-  
-  if (lastTimedtextUrlASR && lastVideoIdForTimedtext === currentVid) {
-    console.log('[romaji] using cached ASR timedtext URL as fallback');
-    lastTimedtextUrl = lastTimedtextUrlASR;
     return true;
   }
   
@@ -810,18 +793,17 @@ async function onSelectRomaji() {
         }
       }
       if (!tracks || tracks.length === 0) return;
-      let track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-      let isAsr = false;
+      
+      // ONLY look for manual Japanese subtitles - NEVER use ASR
+      const track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+      
       if (!track) {
-        track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
-        if (track) { isAsr = true; asrModeActive = true; }
-      } else {
-        asrModeActive = false;
+        console.log('[romaji] no MANUAL Japanese subtitles found - ASR subtitles are not supported');
+        showToast('No manual Japanese subtitles available. Auto-generated subtitles are not supported.', 'error');
+        return;
       }
-      if (!track) { 
-        showToast('No Japanese subtitles available', 'error'); 
-        return; 
-      }
+      
+      console.log('[romaji] found manual Japanese track:', track.languageCode);
       
       // yt-dlp methodology: use baseUrl directly from track (no CC button toggling)
       if (!track.baseUrl) {
@@ -833,8 +815,8 @@ async function onSelectRomaji() {
       console.log('[romaji] fetching captions for validation using track baseUrl');
       console.log('[romaji] track details - languageCode:', track.languageCode, 'kind:', track.kind || 'manual', 'baseUrl length:', track.baseUrl.length);
       
-      // Fetch using yt-dlp's proven format fallback strategy
-      const sampleValidation = await fetchCaptionsWithFallback(track.baseUrl, isAsr);
+      // Fetch using yt-dlp's proven format fallback strategy (manual subtitles only)
+      const sampleValidation = await fetchCaptionsWithFallback(track.baseUrl);
       if (!sampleValidation.ok) {
         console.error('[romaji] validation fetch failed:', sampleValidation.error);
         
@@ -863,7 +845,7 @@ async function onSelectRomaji() {
         return; 
       }
       const trackName = (track.name && track.name.simpleText) || track.languageCode || 'Unknown';
-      console.log(`[romaji] selected ${isAsr ? 'ASR' : 'manual'} track: ${trackName}`);
+      console.log(`[romaji] selected manual track: ${trackName}`);
       const vid = getCurrentVideoId();
       const cached = romanizationCache.get(vid);
       if (cached?.status === 'ready') {
@@ -939,14 +921,15 @@ async function onSelectRomaji() {
 }
 
 // Fetch captions using yt-dlp's proven strategy (lines 3986-3996, 147)
+// MANUAL SUBTITLES ONLY - ASR is NOT supported
 // Priority: baseUrl as-is → format fallback sequence → error with PO token detection
-async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
+async function fetchCaptionsWithFallback(baseUrl) {
   if (!baseUrl) {
     throw new Error('No baseUrl provided');
   }
   
   // DEBUG: Log the original baseUrl parameters
-  console.log('[romaji] fetchCaptionsWithFallback called');
+  console.log('[romaji] fetchCaptionsWithFallback called (MANUAL subtitles only)');
   console.log('[romaji] ORIGINAL baseUrl (first 200 chars):', baseUrl.substring(0, 200));
   try {
     const urlObj = new URL(baseUrl);
@@ -962,14 +945,10 @@ async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
     console.error('[romaji] failed to parse baseUrl:', e);
   }
   
-  console.log('[romaji] fetchCaptionsWithFallback - baseUrl length:', baseUrl.length, 'isASR:', isASR);
+  console.log('[romaji] fetchCaptionsWithFallback - baseUrl length:', baseUrl.length);
   
-  // yt-dlp format preferences (line 147: json3, srv1, srv2, srv3, ttml, srt, vtt)
-  // ASR subtitles: Prefer json3/srv formats (more reliable for auto-generated)
-  // Manual subtitles: Prefer json3 then ttml/vtt
-  const formats = isASR 
-    ? ['json3', 'srv3', 'srv1', 'srv2', 'vtt', 'ttml'] 
-    : ['json3', 'srv1', 'srv2', 'srv3', 'ttml', 'vtt'];
+  // MANUAL subtitles ONLY - use yt-dlp's format order for manual tracks (line 147)
+  const formats = ['json3', 'srv1', 'srv2', 'srv3', 'ttml', 'vtt'];
   
   // yt-dlp philosophy: Just try everything. Don't check for PO tokens upfront.
   
@@ -1040,22 +1019,22 @@ async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
 
 // Legacy function - redirects to baseUrl extraction + yt-dlp fetch
 // DEPRECATED: Prefer getting baseUrl from track and calling fetchCaptionsWithFallback directly
-async function fetchCaptionsUsingSniff(preferAsr = false) {
-  console.log('[romaji] fetchCaptionsUsingSniff (LEGACY) - preferAsr:', preferAsr);
+async function fetchCaptionsUsingSniff() {
+  console.log('[romaji] fetchCaptionsUsingSniff (LEGACY) - MANUAL subtitles only');
   
-  // Get baseUrl from track (no sniffing needed)
-  const baseUrl = await getTimedtextUrlFromTrack(preferAsr);
+  // Get baseUrl from track (no sniffing needed, manual only)
+  const baseUrl = await getTimedtextUrlFromTrack();
   if (!baseUrl) {
     throw new Error('Could not get timedtext baseUrl from track');
   }
   
   console.log('[romaji] using track baseUrl (length:', baseUrl.length, ')');
   
-  // Use yt-dlp strategy
-  return await fetchCaptionsWithFallback(baseUrl, preferAsr);
+  // Use yt-dlp strategy (manual subtitles only)
+  return await fetchCaptionsWithFallback(baseUrl);
 }
 
-async function getTimedtextUrlFromTrack(preferAsr = false) {
+async function getTimedtextUrlFromTrack() {
   const vid = getCurrentVideoId();
   if (!vid) return null;
   
@@ -1081,17 +1060,11 @@ async function getTimedtextUrlFromTrack(preferAsr = false) {
   
   console.log('[romaji] available tracks:', tracks.map(t => `${t.languageCode} (${t.kind || 'manual'})`).join(', '));
   
-  let track = null;
-  if (preferAsr) {
-    track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
-    if (!track) track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-  } else {
-    track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-    if (!track) track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind === 'asr');
-  }
+  // ONLY find MANUAL Japanese subtitles - NO ASR support
+  const track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
   
   if (!track) {
-    console.warn('[romaji] no Japanese track found');
+    console.warn('[romaji] no MANUAL Japanese track found (ASR not supported)');
     console.log('[romaji] all tracks:', tracks);
     return null;
   }
@@ -1101,7 +1074,7 @@ async function getTimedtextUrlFromTrack(preferAsr = false) {
     return null;
   }
   
-  console.log('[romaji] selected track:', track.languageCode, track.kind || 'manual', 'baseUrl length:', track.baseUrl.length);
+  console.log('[romaji] selected MANUAL track:', track.languageCode, 'baseUrl length:', track.baseUrl.length);
   
   return track.baseUrl;
 }
@@ -1745,7 +1718,7 @@ function updateMenuCheckmarks() {
       item.setAttribute('aria-checked', 'false');
     });
     
-            updateSubtitleDisplay(asrModeActive ? 'Romaji (auto)' : 'Romaji');
+            updateSubtitleDisplay('Romaji');
   } else {
     document.body.classList.remove('romaji-active');
   }
@@ -1798,7 +1771,7 @@ function updateCaptionButton() {
   setTimeout(() => {
     const captionDisplay = document.querySelector('.ytp-subtitles-button .ytp-subtitles-button-text');
     if (captionDisplay && isRomajiActive) {
-      captionDisplay.textContent = asrModeActive ? 'Romaji (auto)' : 'Romaji';
+      captionDisplay.textContent = 'Romaji';
     }
   }, 100);
 }
