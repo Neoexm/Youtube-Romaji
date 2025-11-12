@@ -163,21 +163,20 @@ function buildTimedTextUrl(baseUrl, options = {}) {
   try {
     const url = new URL(baseUrl);
     
-    // Add format parameter if specified (yt-dlp line 3989)
+    // Only modify fmt parameter if specified (yt-dlp line 3989)
     if (options.fmt) {
       url.searchParams.set('fmt', options.fmt);
     }
     
-    // Set xosf to empty to avoid undesirable text position data (yt-dlp line 3990)
-    // This prevents YouTube from returning position/alignment data we don't need
-    url.searchParams.set('xosf', '');
-    
-    // For auto-translation, add tlang parameter (yt-dlp line 4086)
+    // Only add tlang for translations (yt-dlp line 4086)
     if (options.tlang) {
       url.searchParams.set('tlang', options.tlang);
     }
     
-    // NEVER touch these parameters - they come signed from baseUrl:
+    // DON'T touch xosf - yt-dlp's Python xosf:[] means OMIT the parameter entirely
+    // Setting xosf='' (empty string) breaks YouTube's API and returns empty responses
+    
+    // NEVER touch these signed parameters - they come from baseUrl:
     // - signature/sig: Required for authentication
     // - expire: URL expiration timestamp
     // - sparams: Signed parameters list
@@ -235,9 +234,17 @@ async function fetchRaw(url) {
       throw new Error('Invalid path - only timedtext API allowed');
     }
     
+    // IMPORTANT: Fetch with the ORIGINAL url string, not parsedUrl.toString()
     const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
     const text = await res.text();
     const ok = res.ok && text.trim().length > 0;
+    
+    // Enhanced logging for debugging
+    console.log('[romaji] fetchRaw result - status:', res.status, 'length:', text.length, 'ok:', ok);
+    if (text.length === 0 && res.ok) {
+      console.warn('[romaji] WARNING: HTTP 200 but empty response body!');
+    }
+    
     return { 
       ok, 
       text, 
@@ -245,6 +252,7 @@ async function fetchRaw(url) {
       status: res.status
     };
   } catch (err) {
+    console.error('[romaji] fetchRaw error:', err);
     return { ok: false, text: '', ct: '', status: 0, error: err.message };
   }
 }
@@ -937,6 +945,23 @@ async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
     throw new Error('No baseUrl provided');
   }
   
+  // DEBUG: Log the original baseUrl parameters
+  console.log('[romaji] fetchCaptionsWithFallback called');
+  console.log('[romaji] ORIGINAL baseUrl (first 200 chars):', baseUrl.substring(0, 200));
+  try {
+    const urlObj = new URL(baseUrl);
+    console.log('[romaji] baseUrl has parameters:', {
+      v: urlObj.searchParams.get('v'),
+      lang: urlObj.searchParams.get('lang'),
+      fmt: urlObj.searchParams.get('fmt'),
+      xosf: urlObj.searchParams.get('xosf'),
+      hasPot: urlObj.searchParams.has('pot'),
+      hasSig: urlObj.searchParams.has('signature') || urlObj.searchParams.has('sig')
+    });
+  } catch (e) {
+    console.error('[romaji] failed to parse baseUrl:', e);
+  }
+  
   console.log('[romaji] fetchCaptionsWithFallback - baseUrl length:', baseUrl.length, 'isASR:', isASR);
   
   // yt-dlp format preferences (line 147: json3, srv1, srv2, srv3, ttml, srt, vtt)
@@ -949,7 +974,8 @@ async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
   // yt-dlp philosophy: Just try everything. Don't check for PO tokens upfront.
   
   // ALWAYS try baseUrl as-is first (YouTube may have already set optimal fmt)
-  console.log('[romaji] trying baseUrl as-is (YouTube\'s default format)...');
+  console.log('[romaji] trying baseUrl UNMODIFIED (YouTube\'s default format)...');
+  console.log('[romaji] EXACT URL being fetched:', baseUrl);
   let result = await fetchRaw(baseUrl);
   let lastStatus = result.status;
   
@@ -969,6 +995,7 @@ async function fetchCaptionsWithFallback(baseUrl, isASR = false) {
   for (const fmt of formats) {
     const url = buildTimedTextUrl(baseUrl, { fmt });
     console.log(`[romaji] trying fmt=${fmt}...`);
+    console.log('[romaji] EXACT URL being fetched:', url);
     
     result = await fetchRaw(url);
     lastStatus = result.status;
