@@ -262,15 +262,22 @@ async function fetchRaw(url) {
 const romanizationCache = new Map(); // videoId -> { status: 'pending'|'ready'|'error', cues: [...] }
 
 async function startProactiveRomanization(videoId, tracks) {
-  // ONLY proactively romanize MANUAL Japanese subtitles
-  const manualTrack = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-  
+  const manualTrack = tracks.find(t => {
+    if (!JAPANESE_LANG_RE.test(t.languageCode)) return false;
+    if (t.kind === 'asr') return false;
+    if (t.baseUrl?.includes('&caps=asr') || t.baseUrl?.includes('&kind=asr')) return false;
+    return true;
+  });
+
   if (!manualTrack) {
     console.log('[romaji] no MANUAL Japanese track for proactive romanization - skipping (ASR not supported)');
+    console.log('[romaji] available tracks:', tracks.map(t => ({
+      lang: t.languageCode,
+      kind: t.kind,
+      hasAsrInUrl: t.baseUrl?.includes('&caps=asr')
+    })));
     return;
-  }
-  
-  if (!manualTrack.baseUrl) {
+  }  if (!manualTrack.baseUrl) {
     console.warn('[romaji] manual track missing baseUrl, cannot start proactive romanization');
     return;
   }
@@ -481,7 +488,12 @@ function tryWireCaptionMenu() {
     settingsBtn.addEventListener('click', () => {
       setTimeout(() => {
         const tracks = getCachedTracks();
-        const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
+        const hasManualJa = tracks.some(t => {
+          if (!JAPANESE_LANG_RE.test(t.languageCode || "")) return false;
+          if (t.kind === 'asr') return false;
+          if (t.baseUrl?.includes('&caps=asr') || t.baseUrl?.includes('&kind=asr')) return false;
+          return true;
+        });
         if (hasManualJa) {
           updateSubtitleCount();
           if (isRomajiActive) {
@@ -504,7 +516,12 @@ function tryWireCaptionMenu() {
           } else if (title && title.textContent === 'Settings') {
             setTimeout(() => {
               const tracks = getCachedTracks();
-              const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
+              const hasManualJa = tracks.some(t => {
+                if (!JAPANESE_LANG_RE.test(t.languageCode || "")) return false;
+                if (t.kind === 'asr') return false;
+                if (t.baseUrl?.includes('&caps=asr') || t.baseUrl?.includes('&kind=asr')) return false;
+                return true;
+              });
               if (hasManualJa) {
                 updateSubtitleCount();
                 if (isRomajiActive) {
@@ -572,8 +589,12 @@ async function injectCaptionEntries(menuEl) {
   const frag = document.createDocumentFragment();
   const tracks = getCachedTracks();
   console.log('[romaji] cached tracks:', tracks.length, tracks);
-  const hasManualJa = tracks.some(t => JAPANESE_LANG_RE.test(t.languageCode || "") && t.kind !== 'asr');
-  // ONLY show Romaji option if MANUAL Japanese subtitles exist (no ASR support)
+  const hasManualJa = tracks.some(t => {
+    if (!JAPANESE_LANG_RE.test(t.languageCode || "")) return false;
+    if (t.kind === 'asr') return false;
+    if (t.baseUrl?.includes('&caps=asr') || t.baseUrl?.includes('&kind=asr')) return false;
+    return true;
+  });
   if (hasManualJa) {
     frag.appendChild(buildMenuItem("Romaji", onSelectRomaji, "romaji:auto"));
   }
@@ -793,19 +814,47 @@ async function onSelectRomaji() {
         }
       }
       if (!tracks || tracks.length === 0) return;
-      
-      // ONLY look for manual Japanese subtitles - NEVER use ASR
-      const track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
-      
+
+      console.log('[romaji] ALL TRACKS FROM YOUTUBE:', tracks.map(t => ({
+        lang: t.languageCode,
+        kind: t.kind,
+        name: t.name?.simpleText || t.name,
+        baseUrlPreview: t.baseUrl?.substring(0, 300),
+        hasCapAsr: t.baseUrl?.includes('&caps=asr'),
+        hasKindAsr: t.baseUrl?.includes('&kind=asr')
+      })));
+
+      const track = tracks.find(t => {
+        if (!JAPANESE_LANG_RE.test(t.languageCode)) return false;
+        
+        if (t.kind === 'asr') {
+          console.log('[romaji] skipping track (kind=asr):', t.languageCode);
+          return false;
+        }
+        
+        if (t.baseUrl?.includes('&caps=asr') || t.baseUrl?.includes('&kind=asr')) {
+          console.log('[romaji] skipping track (baseUrl contains ASR marker):', t.languageCode);
+          return false;
+        }
+        
+        return true;
+      });
+
       if (!track) {
         console.log('[romaji] no MANUAL Japanese subtitles found - ASR subtitles are not supported');
+        console.log('[romaji] all available tracks:', tracks.map(t => ({
+          lang: t.languageCode,
+          kind: t.kind,
+          baseUrlHasAsr: t.baseUrl?.includes('&caps=asr')
+        })));
         showToast('No manual Japanese subtitles available. Auto-generated subtitles are not supported.', 'error');
         return;
       }
-      
+
       console.log('[romaji] found manual Japanese track:', track.languageCode);
-      
-      // yt-dlp methodology: use baseUrl directly from track (no CC button toggling)
+      console.log('[romaji] track name:', track.name?.simpleText || track.name);
+      console.log('[romaji] track baseUrl preview:', track.baseUrl?.substring(0, 200));
+      console.log('[romaji] track does NOT contain &caps=asr:', !track.baseUrl?.includes('&caps=asr'));      // yt-dlp methodology: use baseUrl directly from track (no CC button toggling)
       if (!track.baseUrl) {
         console.error('[romaji] track missing baseUrl:', track);
         showToast('Subtitle URL not available', 'error');
@@ -1060,8 +1109,12 @@ async function getTimedtextUrlFromTrack() {
   
   console.log('[romaji] available tracks:', tracks.map(t => `${t.languageCode} (${t.kind || 'manual'})`).join(', '));
   
-  // ONLY find MANUAL Japanese subtitles - NO ASR support
-  const track = tracks.find(t => JAPANESE_LANG_RE.test(t.languageCode) && t.kind !== 'asr');
+  const track = tracks.find(t => {
+    if (!JAPANESE_LANG_RE.test(t.languageCode)) return false;
+    if (t.kind === 'asr') return false;
+    if (t.baseUrl?.includes('&caps=asr') || t.baseUrl?.includes('&kind=asr')) return false;
+    return true;
+  });
   
   if (!track) {
     console.warn('[romaji] no MANUAL Japanese track found (ASR not supported)');

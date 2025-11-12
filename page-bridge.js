@@ -126,16 +126,23 @@
   function getCaptionTracks(pr) {
     const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     
-    // Return full track objects with all yt-dlp-relevant fields
-    // No filtering or transformation - let content script handle selection
-    return tracks.map(track => ({
-      baseUrl: track.baseUrl || null,
-      languageCode: track.languageCode || null,
-      kind: track.kind || null,  // 'asr' for auto-generated, null/undefined for manual
-      name: track.name || null,  // Contains simpleText with display name
-      isTranslatable: track.isTranslatable || false,
-      vssId: track.vssId || null  // Internal YouTube track ID
-    }));
+    return tracks.map(track => {
+      const baseUrl = track.baseUrl || '';
+      
+      const isAsrByKind = track.kind === 'asr';
+      const isAsrByUrl = baseUrl.includes('&caps=asr') || baseUrl.includes('&kind=asr');
+      
+      const correctedKind = (isAsrByKind || isAsrByUrl) ? 'asr' : track.kind || null;
+      
+      return {
+        baseUrl: baseUrl || null,
+        languageCode: track.languageCode || null,
+        kind: correctedKind,
+        name: track.name || null,
+        isTranslatable: track.isTranslatable || false,
+        vssId: track.vssId || null
+      };
+    });
   }
 
   function getVideoId() {
