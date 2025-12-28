@@ -1,23 +1,26 @@
 #romaji-caption-overlay {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 60px;
-  margin: 0 auto;
-  width: 100%;
-  max-width: none;
-  padding: 0 12%;
-  box-sizing: border-box;
+  left: 50%;
+  bottom: 60px; /* Will be dynamically adjusted by position observer */
+  transform: translateX(-50%);
   pointer-events: none;
-  line-height: 1.3;
-  text-align: center;
   z-index: 68;
-  white-space: pre-wrap;
-  word-wrap: break-word;
+  text-align: center;
+  
+  /* Container should NOT have background - only the text span inside should */
+  /* This ensures background wraps tightly around text like YouTube's native captions */
 }
 
-.html5-video-player:not(.ytp-show-cards-title).ytp-autohide #romaji-caption-overlay {
-  opacity: 0.9;
+#romaji-caption-overlay .romaji-caption-text {
+  display: inline-block;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-width: 90vw;
+  
+  /* All styling properties below are dynamically set by JavaScript */
+  /* to mirror YouTube's caption settings */
+  /* Do NOT add hardcoded: fontSize, fontFamily, color, backgroundColor, */
+  /* lineHeight, textShadow, padding, borderRadius, etc. */
 }
 
 body.romaji-active .ytp-panel-menu .ytp-menuitem[role="menuitemradio"]:not([data-romaji-entry]) .ytp-menuitem-toggle-checkbox {

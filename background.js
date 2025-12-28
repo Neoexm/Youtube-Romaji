@@ -42,73 +42,44 @@ async function prune() {
   if (toDelete.length) await chrome.storage.local.remove(toDelete);
 }
 
-// Fetch raw captions from YouTube following yt-dlp principles
-// - Validate URL security (hostname, path)
-// - Include credentials (yt-dlp uses cookies)
-// - Don't cache (signatures expire)
-// - Return status code for better error handling
+// Fetch raw captions from YouTube - NO URL MUTATIONS
+// Content script handles format strategy and passes exact URL
 async function fetchTimedTextRaw(url) {
   console.log('[romaji-bg] fetchTimedTextRaw called');
   
   if (!url || typeof url !== 'string') {
-    return { ok: false, error: 'Invalid URL provided', status: 0 };
-  }
-  
-  // Security validation - only allow YouTube timedtext API
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(url);
-  } catch (e) {
-    console.error('[romaji-bg] invalid URL format:', e);
-    return { ok: false, error: 'Malformed URL', status: 0 };
-  }
-  
-  if (parsedUrl.hostname !== 'www.youtube.com') {
-    console.error('[romaji-bg] invalid hostname:', parsedUrl.hostname);
-    return { ok: false, error: 'Invalid hostname - only youtube.com allowed', status: 0 };
-  }
-  
-  if (!parsedUrl.pathname.includes('/api/timedtext')) {
-    console.error('[romaji-bg] invalid path:', parsedUrl.pathname);
-    return { ok: false, error: 'Invalid path - only /api/timedtext allowed', status: 0 };
+    return { ok: false, error: 'Invalid URL provided' };
   }
   
   console.log('[romaji-bg] fetching from:', url.substring(0, 150) + '...');
   
   try {
     const response = await fetch(url, {
-      credentials: 'include',  // yt-dlp uses cookies
-      method: 'GET',
-      cache: 'no-store'  // Don't cache - signatures expire
+      credentials: 'include',
+      method: 'GET'
     });
     
     console.log('[romaji-bg] response status:', response.status);
     
     if (!response.ok) {
       console.error('[romaji-bg] fetch failed with status:', response.status);
-      return { ok: false, error: `HTTP ${response.status}`, status: response.status };
+      return { ok: false, error: `HTTP ${response.status}` };
     }
     
     const body = await response.text();
     console.log('[romaji-bg] response length:', body.length);
     
-    // yt-dlp stops at first non-empty response
     if (!body || body.trim().length === 0) {
       console.warn('[romaji-bg] empty response received');
-      return { ok: false, error: 'Empty response', status: response.status };
+      return { ok: false, error: 'Empty response' };
     }
     
     console.log('[romaji-bg] fetch successful, length:', body.length);
-    return { 
-      ok: true, 
-      body, 
-      status: response.status,
-      contentType: response.headers.get('content-type')
-    };
+    return { ok: true, body };
     
   } catch (err) {
     console.error('[romaji-bg] fetch error:', err);
-    return { ok: false, error: err.message || 'Network error', status: 0 };
+    return { ok: false, error: err.message || 'Network error' };
   }
 }
 
