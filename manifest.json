@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Romaji + Custom Subtitles",
-  "version": "1.0.0",
-  "description": "Adds Romaji option to YouTube subtitles and supports per-video custom subtitle uploads.",
+  "name": "YouTube Romaji Captions",
+  "version": "2.0.0",
+  "description": "Adds Romaji captions to YouTube videos using Musixmatch lyrics.",
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
@@ -19,8 +19,7 @@
   "permissions": ["storage", "scripting"],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "https://youtu.be/*",
-    "https://m.youtube.com/*"
+    "https://youtube-romaji-api.fly.dev/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -32,14 +31,6 @@
       "css": ["overlay.css"],
       "run_at": "document_start",
       "all_frames": false
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "page-bridge.js"
-      ],
-      "matches": ["<all_urls>"]
     }
   ]
 }

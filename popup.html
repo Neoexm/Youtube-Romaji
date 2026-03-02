@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Romaji & Custom Subs</title>
+  <title>Romaji Captions</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div id="app">
     <div id="vid"></div>
     <div id="title"></div>
-    
+
     <div id="uibar">
       <label class="file">
         <input id="file" type="file" accept=".srt,.vtt,.ass,.ssa,.txt">
@@ -18,11 +18,6 @@
       </label>
       <input id="name" type="text" placeholder="Track name" aria-label="Track name">
       <button id="save">Save</button>
-    </div>
-    <div style="margin: 10px 0;">
-      <button id="clear-cache" style="width: 100%; padding: 8px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-        Clear All Cache
-      </button>
     </div>
     <div id="status" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="preview" role="region" aria-live="polite" aria-label="Preview"></div>

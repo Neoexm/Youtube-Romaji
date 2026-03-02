@@ -1,23 +1,19 @@
 {
   "name": "youtube-romaji-api",
-  "version": "1.0.0",
-  "description": "Romaji conversion API with OpenAI and Supabase caching",
+  "version": "2.0.0",
+  "description": "Romaji conversion API using Musixmatch lyrics and Kuroshiro romanization",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.38.0",
     "axios": "^1.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "kuroshiro": "^1.2.0",
-    "kuroshiro-analyzer-kuromoji": "^1.1.0",
-    "openai": "^4.20.0",
-    "string-similarity": "^4.0.4",
-    "ytdl-core": "^4.11.5"
+    "kuroshiro-analyzer-kuromoji": "^1.1.0"
   },
   "engines": {
     "node": ">=18.0.0"
