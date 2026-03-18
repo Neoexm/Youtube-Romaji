@@ -125,17 +125,36 @@ function parseSongInfo(title, channel) {
 
   // Japanese bracket format: Artist「Song」 or Artist『Song』
   const jpBracket = cleaned.match(/^(.+?)\s*[「『](.+?)[」』]/);
-  if (jpBracket) return { artist: jpBracket[1].trim(), track: jpBracket[2].trim() };
+  if (jpBracket) {
+    let artist = jpBracket[1].trim();
+    artist = extractPrimaryArtist(artist);
+    return { artist, track: jpBracket[2].trim() };
+  }
 
   // Standard dash format: Artist - Song
   const dash = cleaned.match(/^([^-–—]+)\s*[-–—]\s*(.+)$/);
-  if (dash) return { artist: dash[1].trim(), track: dash[2].trim() };
+  if (dash) {
+    let artist = dash[1].trim();
+    artist = extractPrimaryArtist(artist);
+    return { artist, track: dash[2].trim() };
+  }
 
   // Slash format: Song / Artist (common in JP YouTube)
   const slash = cleaned.match(/^(.+?)\s*\/\s*(.+)$/);
-  if (slash) return { artist: slash[2].trim(), track: slash[1].trim() };
+  if (slash) {
+    let artist = slash[2].trim();
+    artist = extractPrimaryArtist(artist);
+    return { artist, track: slash[1].trim() };
+  }
 
   return { artist: channel || '', track: cleaned };
+}
+
+function extractPrimaryArtist(artist) {
+  artist = artist.trim();
+  artist = artist.replace(/\s*\(.*?\)\s*/g, ' ').trim();
+  artist = artist.split(/\s+(feat\.|ft\.|featuring|vs\.?|VS|&)\s+/i)[0].trim();
+  return artist;
 }
 
 // ============================================================================
@@ -244,6 +263,25 @@ app.post('/lyrics', async (req, res) => {
         }
       } catch (e) {
         console.log(`[lyrics] broad-search failed: ${e.message}`);
+      }
+    }
+
+    // Strategy 4: search by track name alone (for obscure songs)
+    if (!track) {
+      try {
+        const body = await mxm('track.search', {
+          q_track: songInfo.track,
+          f_lyrics_language: 'ja',
+          f_has_lyrics: 1,
+          page_size: 5,
+          s_track_rating: 'desc'
+        });
+        if (body?.track_list?.length > 0) {
+          track = body.track_list[0].track;
+          console.log(`[lyrics] track-only search: "${track.track_name}" by ${track.artist_name}`);
+        }
+      } catch (e) {
+        console.log(`[lyrics] track-only search failed: ${e.message}`);
       }
     }
 
