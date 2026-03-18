@@ -69,6 +69,7 @@ function setCache(key, data) {
 
 async function mxm(endpoint, params) {
   const url = `${MXM_BASE}/${endpoint}`;
+  console.log(`[mxm] ${endpoint}:`, JSON.stringify(params));
   const res = await axios.get(url, {
     params: { apikey: MXM_KEY, ...params },
     timeout: 10000
@@ -76,6 +77,8 @@ async function mxm(endpoint, params) {
   const msg = res.data?.message;
   if (!msg || msg.header?.status_code !== 200) {
     const code = msg?.header?.status_code || 'unknown';
+    const bodySnip = JSON.stringify(msg?.body || {}).substring(0, 200);
+    console.log(`[mxm] error response:`, { code, body: bodySnip });
     throw new Error(`Musixmatch ${endpoint}: ${code}`);
   }
   return msg.body;
@@ -103,7 +106,46 @@ function parseLRC(lrcBody) {
 }
 
 // ============================================================================
-// TITLE PARSING
+// STRING SIMILARITY
+// ============================================================================
+
+function calculateSimilarity(a, b) {
+  if (a === b) return 1;
+  if (!a || !b) return 0;
+
+  // Check if one is a substring of the other
+  if (a.includes(b) || b.includes(a)) return 0.8;
+
+  // Levenshtein distance based similarity
+  const maxLen = Math.max(a.length, b.length);
+  const distance = levenshteinDistance(a, b);
+  const similarity = 1 - distance / maxLen;
+
+  return Math.max(0, similarity);
+}
+
+function levenshteinDistance(a, b) {
+  const matrix = Array(b.length + 1)
+    .fill(null)
+    .map(() => Array(a.length + 1).fill(0));
+
+  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+
+  for (let j = 1; j <= b.length; j++) {
+    for (let i = 1; i <= a.length; i++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1,
+        matrix[j - 1][i] + 1,
+        matrix[j - 1][i - 1] + cost
+      );
+    }
+  }
+
+  return matrix[b.length][a.length];
+}
+
 // ============================================================================
 
 function cleanTitle(raw) {
@@ -227,6 +269,8 @@ app.post('/lyrics', async (req, res) => {
       if (body?.track_list?.length > 0) {
         track = body.track_list[0].track;
         console.log(`[lyrics] ja-search: "${track.track_name}" by ${track.artist_name}`);
+      } else {
+        console.log(`[lyrics] ja-search: no results`);
       }
     } catch (e) {
       console.log(`[lyrics] ja-search failed: ${e.message}`);
@@ -242,46 +286,54 @@ app.post('/lyrics', async (req, res) => {
         if (body?.track) {
           track = body.track;
           console.log(`[lyrics] matcher: "${track.track_name}" by ${track.artist_name}`);
+        } else {
+          console.log(`[lyrics] matcher: no result`);
         }
       } catch (e) {
         console.log(`[lyrics] matcher failed: ${e.message}`);
       }
     }
 
-    // Strategy 3: broad search
+    // Strategy 3: broad search with simplified artist
     if (!track) {
       try {
+        const simpleArtist = songInfo.artist.split(/\s+/)[0];
         const body = await mxm('track.search', {
-          q: `${songInfo.artist} ${songInfo.track}`,
+          q: `${simpleArtist} ${songInfo.track}`,
+          f_lyrics_language: 'ja',
           f_has_lyrics: 1,
-          page_size: 5,
+          page_size: 10,
           s_track_rating: 'desc'
         });
         if (body?.track_list?.length > 0) {
           track = body.track_list[0].track;
-          console.log(`[lyrics] broad-search: "${track.track_name}" by ${track.artist_name}`);
+          console.log(`[lyrics] simplified-search: "${track.track_name}" by ${track.artist_name}`);
+        } else {
+          console.log(`[lyrics] simplified-search: no results`);
         }
       } catch (e) {
-        console.log(`[lyrics] broad-search failed: ${e.message}`);
+        console.log(`[lyrics] simplified-search failed: ${e.message}`);
       }
     }
 
-    // Strategy 4: search by track name alone (for obscure songs)
+    // Strategy 4: try matching by track title alone
     if (!track) {
       try {
         const body = await mxm('track.search', {
           q_track: songInfo.track,
           f_lyrics_language: 'ja',
           f_has_lyrics: 1,
-          page_size: 5,
+          page_size: 10,
           s_track_rating: 'desc'
         });
         if (body?.track_list?.length > 0) {
           track = body.track_list[0].track;
-          console.log(`[lyrics] track-only search: "${track.track_name}" by ${track.artist_name}`);
+          console.log(`[lyrics] track-only: "${track.track_name}" by ${track.artist_name}`);
+        } else {
+          console.log(`[lyrics] track-only: no results`);
         }
       } catch (e) {
-        console.log(`[lyrics] track-only search failed: ${e.message}`);
+        console.log(`[lyrics] track-only failed: ${e.message}`);
       }
     }
 
@@ -290,6 +342,21 @@ app.post('/lyrics', async (req, res) => {
       setCache(cacheKey, response);
       return res.json(response);
     }
+
+    // Validate the match: check if track name is reasonably similar
+    const matchConfidence = calculateSimilarity(
+      songInfo.track.toLowerCase(),
+      track.track_name.toLowerCase()
+    );
+    const MIN_CONFIDENCE = 0.4;
+    if (matchConfidence < MIN_CONFIDENCE) {
+      console.log(`[lyrics] match confidence too low: ${matchConfidence.toFixed(2)} (threshold: ${MIN_CONFIDENCE})`);
+      const response = { ok: false, error: 'Could not find accurate match on Musixmatch' };
+      setCache(cacheKey, response);
+      return res.json(response);
+    }
+
+    console.log(`[lyrics] match confidence: ${matchConfidence.toFixed(2)}`)
 
     // Get synced subtitles
     let cues = null;
