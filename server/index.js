@@ -294,13 +294,35 @@ app.post('/lyrics', async (req, res) => {
       }
     }
 
-    // Strategy 3: broad search with simplified artist
+    // Strategy 3: romanize the track name and search (before broad match attempts)
+    if (!track && kuroshiroReady) {
+      try {
+        const romanized = await romanize(songInfo.track);
+        console.log(`[lyrics] romanized track: "${romanized}"`);
+        const body = await mxm('track.search', {
+          q_track: romanized,
+          q_artist: songInfo.artist,
+          f_has_lyrics: 1,
+          page_size: 10,
+          s_track_rating: 'desc'
+        });
+        if (body?.track_list?.length > 0) {
+          track = body.track_list[0].track;
+          console.log(`[lyrics] romanized-search: "${track.track_name}" by ${track.artist_name}`);
+        } else {
+          console.log(`[lyrics] romanized-search: no results`);
+        }
+      } catch (e) {
+        console.log(`[lyrics] romanized-search failed: ${e.message}`);
+      }
+    }
+
+    // Strategy 4: simplified artist search (broad fallback)
     if (!track) {
       try {
         const simpleArtist = songInfo.artist.split(/\s+/)[0];
         const body = await mxm('track.search', {
           q: `${simpleArtist} ${songInfo.track}`,
-          f_lyrics_language: 'ja',
           f_has_lyrics: 1,
           page_size: 10,
           s_track_rating: 'desc'
@@ -316,7 +338,7 @@ app.post('/lyrics', async (req, res) => {
       }
     }
 
-    // Strategy 4: try matching by track title alone
+    // Strategy 5: try matching by track title alone
     if (!track) {
       try {
         const body = await mxm('track.search', {
@@ -343,20 +365,12 @@ app.post('/lyrics', async (req, res) => {
       return res.json(response);
     }
 
-    // Validate the match: check if track name is reasonably similar
+    // Calculate match confidence (will validate after we get lyrics)
     const matchConfidence = calculateSimilarity(
       songInfo.track.toLowerCase(),
       track.track_name.toLowerCase()
     );
-    const MIN_CONFIDENCE = 0.4;
-    if (matchConfidence < MIN_CONFIDENCE) {
-      console.log(`[lyrics] match confidence too low: ${matchConfidence.toFixed(2)} (threshold: ${MIN_CONFIDENCE})`);
-      const response = { ok: false, error: 'Could not find accurate match on Musixmatch' };
-      setCache(cacheKey, response);
-      return res.json(response);
-    }
-
-    console.log(`[lyrics] match confidence: ${matchConfidence.toFixed(2)}`)
+    console.log(`[lyrics] initial match confidence: ${matchConfidence.toFixed(2)} - "${track.track_name}"`)
 
     // Get synced subtitles
     let cues = null;
@@ -403,15 +417,30 @@ app.post('/lyrics', async (req, res) => {
     }
 
     if (!cues || cues.length === 0) {
-      const response = { ok: false, error: 'No lyrics found for this song' };
+      const response = { ok: false, error: 'No lyrics found or lyrics not available for this song' };
       setCache(cacheKey, response);
       return res.json(response);
     }
 
+    // Revalidate match now that we have cues - be lenient if lyrics are actually Japanese
+    const cuesSample = cues.slice(0, 10).map(c => c.text).join('');
+    const hasJapaneseLyrics = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(cuesSample);
+    const minConfidence = hasJapaneseLyrics ? 0.15 : 0.4;
+
+    if (matchConfidence < minConfidence) {
+      console.log(`[lyrics] match confidence too low: ${matchConfidence.toFixed(2)} (threshold: ${minConfidence}, hasJP: ${hasJapaneseLyrics})`);
+      console.log(`[lyrics]   searched: "${songInfo.track}"`);
+      console.log(`[lyrics]   matched: "${track.track_name}"`);
+      const response = { ok: false, error: 'Could not find accurate match on Musixmatch' };
+      setCache(cacheKey, response);
+      return res.json(response);
+    }
+
+    console.log(`[lyrics] passed validation: confidence ${matchConfidence.toFixed(2)} (threshold: ${minConfidence})`);
+
     // Verify Japanese content
     if (subtitleLang && subtitleLang !== 'ja') {
-      const sample = cues.slice(0, 5).map(c => c.text).join('');
-      const hasJP = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(sample);
+      const hasJP = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(cuesSample);
       if (!hasJP) {
         const response = { ok: false, error: `Lyrics are in ${subtitleLang}, not Japanese` };
         setCache(cacheKey, response);
