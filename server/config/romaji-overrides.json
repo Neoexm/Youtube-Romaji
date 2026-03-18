@@ -1,0 +1,53 @@
+{
+  "text_overrides": {
+    "こんにちは": {
+      "reading": "コンニチワ",
+      "romaji": "konnichiwa",
+      "reason": "Greeting pronounced with topic-particle wa"
+    },
+    "こんばんは": {
+      "reading": "コンバンワ",
+      "romaji": "konbanwa",
+      "reason": "Greeting pronounced with topic-particle wa"
+    }
+  },
+  "token_overrides": {
+    "こんにちは": {
+      "reading": "コンニチワ"
+    },
+    "こんばんは": {
+      "reading": "コンバンワ"
+    },
+    "元気": {
+      "reading": "ゲンキ"
+    },
+    "大丈夫": {
+      "reading": "ダイジョウブ"
+    },
+    "学校": {
+      "reading": "ガッコウ"
+    },
+    "東京": {
+      "reading": "トウキョウ"
+    },
+    "今日": {
+      "reading": "キョウ"
+    },
+    "明日": {
+      "reading": "アシタ"
+    },
+    "私": {
+      "reading": "ワタシ"
+    },
+    "名前": {
+      "reading": "ナマエ"
+    },
+    "日本": {
+      "reading": "ニホン"
+    }
+  },
+  "romaji_overrides": {
+    "YouTube": "YouTube",
+    "VTuber": "VTuber"
+  }
+}

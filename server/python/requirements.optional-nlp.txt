@@ -1,0 +1,4 @@
+kwja>=2.4.0
+SudachiPy>=0.6.8
+sudachidict_full>=20230110
+pyopenjtalk>=0.4.0

@@ -1,0 +1,2 @@
+# The pronunciation sidecar runs in stdlib-only fallback mode by default.
+# Install `requirements.optional-nlp.txt` for the full KWJA + SudachiPy + pyopenjtalk stack.

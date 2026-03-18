@@ -1,93 +1,69 @@
 # Romaji API Server
 
-Express API server that romanizes Japanese text using Genius-guided OpenAI GPT with Supabase caching.
+[`server/index.js`](server/index.js) keeps the public Node/Express API surface, while the authoritative Japanese romanization pipeline now lives in the Python sidecar CLI at [`server/python/romanize_cli.py`](server/python/romanize_cli.py).
 
-## Architecture
+## Runtime architecture
 
-The server uses a hybrid approach combining Genius lyrics as a reference with LLM romanization:
+1. [`server/index.js`](server/index.js) resolves video metadata and Musixmatch lyrics.
+2. [`server/lib/romaji-client.js`](server/lib/romaji-client.js) invokes the Python sidecar with JSON over stdin/stdout.
+3. [`server/python/romaji_service/pipeline.py`](server/python/romaji_service/pipeline.py) runs the canonical pipeline:
+   - normalization
+   - script/content inspection
+   - contextual analysis hooks for KWJA
+   - tokenization/reading extraction via SudachiPy when available
+   - project override handling via [`server/config/romaji-overrides.json`](server/config/romaji-overrides.json)
+   - optional fallback routing for Juman++
+   - pronunciation resolution via [`pyopenjtalk.g2p()`](server/python/romaji_service/pipeline.py:460)
+   - ASCII Hepburn romaji rendering
+   - formatting cleanup
 
-1. **Cache Check** - Check Supabase for existing romanization
-2. **YouTube Metadata** - Extract video title for song identification
-3. **Genius Lyrics Fetch** (Optional) - Retrieve romanized lyrics as reference
-   - Search Genius.com for the song
-   - Scrape lyrics via Apify Actor
-4. **LLM Romanization** - Use OpenAI GPT with Genius reference (when available)
-5. **Cache Storage** - Store result in Supabase for future requests
+## Romanization style
 
-### Cost Optimization
+- ASCII Hepburn only
+- Explicit long vowels: `ou`, `uu`, `aa`, `ei`
+- No macrons in API output
+- Japanese punctuation is normalized to ASCII where practical
+- Line breaks are preserved
 
-- **With Genius Reference**: ~$0.015 per video (OpenAI + Apify)
-- **Without Genius**: ~$0.014 per video (OpenAI only)
-- **Cached Requests**: $0.00 (database lookup only)
-- **Genius Benefit**: Improved romanization consistency and style matching
+## Optional NLP stack
 
-## How It Works
+The sidecar works in stdlib-only fallback mode, but the full production-quality stack is defined in [`server/python/requirements.optional-nlp.txt`](server/python/requirements.optional-nlp.txt):
 
-### 1. YouTube Title Extraction
+- KWJA
+- SudachiPy
+- `sudachidict_full`
+- pyopenjtalk
 
-Uses multiple fallback methods to fetch video metadata:
-- **ytdl-core**: Primary method for extracting video details
-- **oEmbed API**: Fallback method (no API key required)
-- **YouTube Data API v3**: Optional fallback if API key configured
+Install the optional stack locally with:
 
-The title is cleaned to remove common artifacts:
-- Removes YouTube metadata: `【】`, `[]`, `(Official Video)`, etc.
-- Extracts song name from formats like "Artist - Song Title"
-- Handles Japanese characters and mixed formats
+```bash
+python -m pip install -r server/python/requirements.optional-nlp.txt
+```
 
-### 2. Genius Lyrics Fetch (Optional)
+`Juman++` remains optional and is detected through the `JUMANPP_BIN` environment variable when present.
 
-Attempts to find and retrieve romanized lyrics as a reference:
+## Local development
 
-**Multi-Strategy Search:**
-1. Search with original title
-2. If Japanese, romanize and search again
-3. Try "genius romanizations [artist] [keywords]" pattern
+Install Node dependencies:
 
-**Apify Scraping:**
-- Uses the epctex/genius-scraper actor
-- Polls for completion (max 30 seconds)
-- Extracts and cleans HTML lyrics
-- Filters out section markers (`[Verse 1]`, `[Chorus]`, etc.)
+```bash
+cd server && npm ci
+```
 
-### 3. Genius-Guided LLM Romanization
+Run the API:
 
-The core romanization uses OpenAI with a specialized prompt:
+```bash
+cd server && npm start
+```
 
-**System Prompt:**
-- Japanese romanization specialist
-- Hepburn romanization system
-- Uses Genius lyrics as style guide (when available)
-- Maintains exact line count
-- Handles edge cases naturally
+Run server tests:
 
-**User Prompt Variables:**
-- `japanese_captions`: Original Japanese subtitle text
-- `genius_romanized`: Genius lyrics OR "Not available"
-- `line_count`: Number of input lines for validation
+```bash
+cd server && npm test
+```
 
-**LLM Benefits:**
-- Handles credit lines (e.g., "ーツユ" artist tags)
-- Manages timing splits naturally
-- Consistent romanization style with Genius reference
-- Works perfectly without Genius
-- No complex alignment algorithms needed
+Run Python pipeline tests from the repository root:
 
-### 4. Multi-Strategy Genius Search
-
-For Japanese song titles, uses advanced search strategies:
-
-1. **Direct Search**: Original title (Japanese or mixed)
-2. **Romanized Search**: Convert title to romaji using Kuroshiro
-3. **Artist-Focused Search**: Extract artist + keywords pattern
-4. **Title Similarity**: Compare results against original title
-
-This maximizes Genius hit rate for Japanese music.
-
-### 5. Distributed Locking
-
-Prevents concurrent processing of the same video:
-- Inserts `PROCESSING` marker in cache
-- Other requests wait up to 30 seconds
-- Automatic cleanup on errors
-- Race condition handling via unique constraint
+```bash
+python -m unittest discover -s server/python/tests -t server/python -v
+```

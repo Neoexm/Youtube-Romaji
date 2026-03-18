@@ -6,6 +6,9 @@
 app = 'youtube-romaji-api'
 primary_region = 'sjc'
 
+[env]
+  ROMAJI_PYTHON_BIN = 'python3'
+
 [build]
 
 [http_service]
@@ -17,6 +20,6 @@ primary_region = 'sjc'
   processes = ['app']
 
 [[vm]]
-  memory = '512mb'
+  memory = '2048mb'
   cpu_kind = 'shared'
   cpus = 1
