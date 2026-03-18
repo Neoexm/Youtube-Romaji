@@ -53,6 +53,7 @@ ARG INSTALL_FULL_NLP_STACK=1
 # Install Python runtime so Node can invoke the pronunciation sidecar CLI.
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
+      build-essential \
       python3 \
       python3-pip \
       python3-venv \
