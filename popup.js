@@ -22,7 +22,9 @@ async function init() {
       const shorts = url.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
       if (shorts) videoId = shorts[1];
     }
-  } catch {}
+  } catch {
+    videoId = null;
+  }
 
   ctx = { tabId: tab.id, videoId };
   vidEl.textContent = videoId ? `Video ID: ${videoId}` : "No video detected";

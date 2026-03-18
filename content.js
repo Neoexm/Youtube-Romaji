@@ -21,7 +21,9 @@ function getCurrentVideoId() {
     if (v) return v;
     const m = location.pathname.match(/\/shorts\/([A-Za-z0-9_-]+)/);
     if (m) return m[1];
-  } catch (e) {}
+  } catch {
+    return null;
+  }
   return null;
 }
 

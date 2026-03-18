@@ -6,3 +6,7 @@ server/.env
 .DS_Store
 tools/
 .roo/
+__pycache__/
+server/python/__pycache__/
+server/python/.pytest_cache/
+server/python/.venv/

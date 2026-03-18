@@ -1,10 +1,13 @@
 {
   "name": "youtube-romaji",
   "version": "1.0.0",
-  "description": "YouTube Romaji Captions Extension",
+  "description": "YouTube Romaji captions extension with a pronunciation-aware Python sidecar",
   "type": "module",
   "scripts": {
-    "lint": "eslint *.js --max-warnings 10"
+    "lint": "eslint . --max-warnings 10",
+    "test": "node --test server/test/*.test.js && python -m unittest discover -s server/python/tests -t server/python -v",
+    "test:server": "node --test server/test/*.test.js",
+    "test:python": "python -m unittest discover -s server/python/tests -t server/python -v"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
