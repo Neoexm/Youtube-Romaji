@@ -61,9 +61,9 @@ RUN apt-get update -qq && \
 
 COPY python/requirements.txt ./python/requirements.txt
 COPY python/requirements.optional-nlp.txt ./python/requirements.optional-nlp.txt
-RUN python3 -m pip install --no-cache-dir -r python/requirements.txt && \
+RUN python3 -m pip install --no-cache-dir --break-system-packages -r python/requirements.txt && \
     if [ "$INSTALL_FULL_NLP_STACK" = "1" ]; then \
-      python3 -m pip install --no-cache-dir -r python/requirements.optional-nlp.txt; \
+      python3 -m pip install --no-cache-dir --break-system-packages -r python/requirements.optional-nlp.txt; \
     fi
 
 # Create non-root user for security
