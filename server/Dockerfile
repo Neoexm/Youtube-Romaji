@@ -36,9 +36,9 @@ RUN npm ci
 # Install Python runtime dependencies for the pronunciation sidecar.
 COPY python/requirements.txt ./python/requirements.txt
 COPY python/requirements.optional-nlp.txt ./python/requirements.optional-nlp.txt
-RUN python3 -m pip install --no-cache-dir --break-system-packages -r python/requirements.txt && \
+RUN python3 -m pip install --no-cache-dir --no-require-hashes --break-system-packages -r python/requirements.txt && \
     if [ "$INSTALL_FULL_NLP_STACK" = "1" ]; then \
-      python3 -m pip install --no-cache-dir --break-system-packages -r python/requirements.optional-nlp.txt; \
+      python3 -m pip install --no-cache-dir --no-require-hashes --break-system-packages -r python/requirements.optional-nlp.txt; \
     fi
 
 # Copy application code
@@ -62,9 +62,9 @@ RUN apt-get update -qq && \
 
 COPY python/requirements.txt ./python/requirements.txt
 COPY python/requirements.optional-nlp.txt ./python/requirements.optional-nlp.txt
-RUN python3 -m pip install --no-cache-dir --break-system-packages -r python/requirements.txt && \
+RUN python3 -m pip install --no-cache-dir --no-require-hashes --break-system-packages -r python/requirements.txt && \
     if [ "$INSTALL_FULL_NLP_STACK" = "1" ]; then \
-      python3 -m pip install --no-cache-dir --break-system-packages -r python/requirements.optional-nlp.txt; \
+      python3 -m pip install --no-cache-dir --no-require-hashes --break-system-packages -r python/requirements.optional-nlp.txt; \
     fi
 
 # Create non-root user for security
